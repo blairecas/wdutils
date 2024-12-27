@@ -1,0 +1,634 @@
+	.title	WDMAIN
+	.enabl	LC
+
+.macro	.print X
+	mov	X, R0
+	call	PriStr
+.endm
+
+.macro	.ttout X
+	mov	X, R0
+	call	PriChr
+.endm
+
+.macro	.color X
+	movb	X, MsgColor+2
+	mov	#MsgColor, R0
+	call	PriStr
+.endm
+
+	.asect
+	.=1000
+
+Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
+	clr	R0
+	mov	#2, (R0)+			; rti opcode
+	mov	#377, R1
+	clr	(R0)+
+	sob	R1, .-2
+	mov	#200, @#26			; int24 will go with 200 psw
+	; prepare screen
+	.print	#MsgHlo
+	; ppu phase 2 - check HDD, read block 0, check devices
+	mov	@#157776, R0
+	mov	R0, PpuCart			; set cartridge mem map
+	mov	R0, WdrCart			; + both PPU procedures
+	mov	#PpuPhase, R4
+	mov	#PpuSta-PpuPhase/2, R5
+	call	PPRun
+	mov	PPCom, R0			; wait for result
+	bmi	.-4
+	movb	#2, PPCmd
+	sub	#4, PPApp			; include identification (2 words)
+	call	PPSen				; release PPU mem
+	asl	R0				; get error message
+	beq	10$				; no error
+	mov	MsgErrTable(R0), R0
+	jmp	Error
+10$:	; we are ok for now
+	; compute and set partition sizes
+	mov	#End+2, R5
+	mov	#WdrPartTable+4, R0		; partitions table addr (+1 element)
+	mov	#1, R1				; partitions low addr
+	clr	R2				; partitions high addr
+	mov	#24., R3
+20$:	add	(R5)+, R1
+	adc	R2
+	mov	R2, (R0)+			; set part table high
+	mov	R1, (R0)+			; set part table low
+	sob	R3, 20$
+	; compute CRC
+	mov	#MsgOk, R0
+	mov	#End, R5
+	clr	R1
+	clr	R2
+	mov	#377, R3
+30$:	add	(R5)+, R1
+	adc	R2
+	sob	R3, 30$
+	add	(R5), R2
+	bis	R1, R2
+	beq	40$
+	mov	#MsgCrc, R0
+40$:	call	PriStr
+	; maximal partition # in WD (not WE WF)
+	mov	#End+2, R0
+	mov	#8., R3
+50$:	tst	(R0)+
+	beq	60$
+	inc	MaxPart
+	sob	R3, 50$		
+60$:	; ppu phase 3 - WD resident
+	mov	#PpuSta, R4
+	mov	#End-PpuSta/2, R5
+	call	PPRun
+
+PartInfo:
+	.print	#MsgPre1
+	; print WD WE WH
+	mov	#End+2, R5
+	mov	#NewDevices, R4
+	mov	#'0, R2
+	; info
+10$:	.color	#'4
+	.ttout	#267
+	; WD
+	movb	#'D, MsgWd+4.
+	mov	(R5), R1
+	call	PartOnePr
+	.ttout	#40	
+	; WE
+	movb	#'E, MsgWd+4.
+	mov	16.(R5), R1
+	call	PartOnePr
+	.ttout	#40
+	; WH
+	movb	#'F, MsgWd+4.
+	mov	32.(R5), R1
+	call	PartOnePr
+	.ttout	#267
+	; devices
+	.ttout	#40
+	cmp	R2, #'4
+	bhi	20$
+	mov	#'7, 12$+2			; device port - color white
+	mov	#'4, 14$+2			; device name - color green
+	mov	(R4)+, R3			; port #
+	tst	(R4)+				; have device?
+	beq	12$				; yes
+	mov	#'1, 12$+2			; colors blue (no device)
+	mov	#'1, 14$+2
+12$:	.color	#'7
+	mov	R3, R0
+	call	PriOct
+	.ttout	#40
+14$:	.color	#'4
+	mov	(R4)+, R0
+	call	PriStr
+	; end of line
+20$:	.print	#MsgCrlf
+	tst	(R5)+
+	inc	R2
+	cmp	R2, #'8
+	bne	10$
+	.print	#MsgPre2
+
+; select boot partition
+SelectPart:
+	; check if we have any selectable
+	tst	MaxPart
+	bpl	02$
+	mov	#MsgNoPart, R0
+	jmp	Error
+02$:	.print	#MsgPre3
+	; set timer proc
+	mov	#TimerInt, @#100
+	mtps	#0
+	; set previous number
+	mov	End+120, CurPart		; last partition number in ascii 0..
+	bic	#^B1111111111111000, CurPart	; convert to number
+	cmp	CurPart, MaxPart
+	blos	10$
+	mov	MaxPart, CurPart
+10$:	; selection cycle
+	cmp	CurPart, #177777		; compare with previous number
+	beq	20$				; don't need to xor if same
+	mov	CurPart, R1
+	call	XorRect
+	mov	10$+4, R1			; get previous xor-ed rect num
+	call	XorRect				; xor it again
+	mov	CurPart, 10$+4			; store current xor-ed as previous
+20$:	call	GetKey				; 101 - up, 102 - down, 15 - enter
+	mtps	#200
+	clr	@#100				; remove timer int after any keypress
+	cmpb	R0, #101			; up
+	bne	30$
+	dec	CurPart
+30$:	cmpb	R0, #102			; down
+	bne	40$
+	inc	CurPart
+40$:	cmpb	R0, #15				; enter
+	beq	SaveSector0
+	; 0..7 
+	cmpb	R0, #'0
+	blo	50$
+	cmpb	R0, #'7
+	bhi	50$
+	sub	#'0, R0
+	movb	R0, CurPart
+50$:	; check boundaries
+	tst	CurPart
+	bge	90$
+	clr	CurPart
+90$:	cmp	CurPart, MaxPart
+	blos	10$
+	mov	MaxPart, CurPart
+	br	10$
+
+; save selection to sector 0
+SaveSector0:
+	mov	#14., R0
+	call	ClearLine
+	mov	CurPart, End+120
+	add	#'0, End+120
+	; recount CRC
+	mov	#End, R0
+	clr	R1
+	clr	R2
+	mov	#376, R3
+10$:	add	(R0)+, R1
+	adc	R2
+	sob	R3, 10$
+	neg	R1
+	com	R2
+	mov	R1, (R0)+
+	mov	R2, (R0)
+	; write block 0
+	call	DoReadWrite			; write it
+	neg	ComSize				; restore read
+
+; read block 0 of selected partition
+PartBoot:
+	.print	#MsgCrLf
+	.print	#MsgDefClr
+	movb	CurPart, bComPart
+	call	DoReadWrite
+	; copy it to addr 0
+	mov	#End, R0
+	clr	R1
+	mov	#400, R2
+	mov	(R0)+, (R1)+
+	sob	R2, .-2
+	; let's rock
+	clr	R0				; partition #
+	jmp	@#0
+
+
+; timer interrupt and jump to boot when timer expired
+TimerInt:
+	dec	#120.
+	bne	99$
+	mov	#1000, SP
+	mtps	#200
+	clr	@#100
+	jmp	SaveSector0
+99$:	rti
+
+; execute read/write operation in PPU
+DoReadWrite:
+	mov	#WDsysI, @#C_WDR_INT		; WD.SYS int addr (parameters block is from there)
+	mov	#342, @#C_WDR_INT+2		; magic word (PPU will start do something)
+10$:	cmp	#342, @#C_WDR_INT+2		; wait for it to finish
+	beq	10$				; not ready yet	
+	; wait a bit more, CPU must have it's interrupt
+	mov	#200, R0
+	sob	R0, .
+	; TODO: error handling
+	return
+
+
+; R1 - size
+; R2 - number
+PartOnePr:
+	movb	#'7, MsgWd+2.			; white color
+	movb	#'6, MsgWd+9.			; yellow color
+	tst	R1				; partition size
+	bne	10$				; size is >0
+	movb	#'1, MsgWd+2.			; blue color
+	movb	#'1, MsgWd+9.
+10$:	movb	R2, MsgWd+5.			; partition #
+	.print	#MsgWd	
+	mov	R1, R0
+	call	PriDec
+	.color	#'4
+	return
+
+
+; xor rectangle, R1 - num part
+XorRect:
+	tst	R1
+	bmi	99$
+	mul	#80.*11., R1
+	add	#5*80.*11.+1+100000, R1
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	R4, -(SP)
+	mov	R5, -(SP)
+	mov	#176640, R4
+	mov	#176642, R5
+	mov	R1, (R4)
+	mov	#377, R0
+	mov	#11., R2
+10$:	mov	#9., R3
+20$:	xor	R0, (R5)
+	inc	(R4)
+	sob	R3, 20$
+	add	#80.-9., (R4)
+	sob	R2, 10$
+	mov	(SP)+, R5
+	mov	(SP)+, R4
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+99$:	return
+
+
+; halt with error, R0 - message addr
+Error:	mov	R0, -(SP)
+	.color	#'2
+	mov	(SP)+, R0
+	call	PriStr
+	.print	#MsgDefClr
+	.print	#MsgCrLf
+	halt
+
+; get key to -> R0
+GetKey:	tstb	@#177560
+	bpl	.-4
+10$:	movb	@#177562, R0
+	tstb	@#177560
+	bmi	10$
+	return
+
+; print character, R0 - char
+PriChr:	tstb	@#177564
+	bpl	.-4
+	movb	R0, @#177566
+	return
+
+; print string, R0 - addr
+PriStr:	mov	R1, -(SP)
+10$:	movb	(R0)+, R1
+	beq	99$
+	tstb	@#177564
+	bpl	.-4
+	movb	R1, @#177566
+	br	10$
+99$:	mov	(SP)+, R1
+	return
+
+; print decimal, R0 - number
+PriDec:	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	#MsgNum5+5, R2
+	mov	#5., R3
+10$:	mov	R0, R1
+	clr	R0
+	div	#10., R0			; R0:R1 / 10. -> R0 - quotient, R1 - reminder
+	add	#'0, R1
+	movb	R1, -(R2)
+	sob	R3, 10$
+	mov	R2, R0
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	br	PriStr
+
+; print octal, R0 - number
+PriOct:	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	#6., R3
+	mov	#MsgNum6, R2
+	clr	R1
+	br	20$
+10$:	clr	R1
+	rol	R0
+	rol	R1
+	rol	R0
+	rol	R1
+20$:	rol	R0
+	rol	R1
+	add	#'0, R1
+	movb	R1, (R2)+
+	sob	R3, 10$
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	mov	#MsgNum6, R0
+	br	PriStr
+
+; go to line, R0=Y
+GotoLine:
+	add	#40, R0
+	movb	R0, MsgPos+2
+	mov	#MsgPos, R0
+	br	PriStr
+
+; clear text line, R0=Y
+ClearLine:
+	call	GotoLine
+	mov	#13, R0
+	br	PriChr
+
+
+
+; new device ports
+C_AY_PORT1	= 177360		; aberrant's AY
+C_MIDI_PORT	= 177366		; general midi
+C_COVOX_PORT	= 177372		; additional covox port
+C_MOUSE_PORT	= 177400		; [YYYYYYYLXXXXXXXR] X,Y 7-bit signed
+C_RTC_PORT	= 177410		; real time clock
+
+NewDevices:	.word	C_AY_PORT1,   0, MsgAy
+		.word	C_MIDI_PORT,  0, MsgMidi
+		.word	C_COVOX_PORT, 0, MsgCovox
+		.word	C_MOUSE_PORT, 0, MsgMouse
+		.word	C_RTC_PORT,   0, MsgRtc
+
+CurPart:	.word	0		; selected partition
+MaxPart:	.word	177777		; maximal # of partitions
+
+Comman:		.word	Comman+2	; current command addr (not using queue for now)
+		.word	0		; block # in partition
+		.byte	0		; command # (373 size, any other read/write)
+bComPart:	.byte	200		; partition # (<0 - operations with absolute block 0)
+		.word	End		; buf addr where to/from
+ComSize:	.word	-400		; size in words (negative is write)
+WdsysI:		rti
+
+MsgNum6:	.ascii	"0"
+MsgNum5:	.asciz	"00000"
+MsgCrLf:	.asciz	<12><15>
+MsgDefClr:	.asciz	<33><240>"4"<33><247>"4"
+MsgPos:		.asciz	<33>"Y  "
+MsgWd:		.asciz	<33><240>"7WDx "<33><240>"4"
+MsgColor:	.asciz	<33><240>"4"
+
+MsgHlo:		.ascii	<33><240>"4"			; char color
+		.ascii	<33><241>"0"			; bgr color
+		.ascii	<33><242>"0"			; screen color
+		.ascii	<33><246>"1"			; 80x24
+		.ascii	<33><247>"0"			; cursor color
+		.ascii	<33><267>			; timer on
+		.ascii	<33>"%!1"<14>			; set text screen and clear it
+		.byte	0
+
+MsgPre1:	.ascii	<252><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><243><12><15>
+		.ascii	<267>"    WDx       WEx       WFx  "<267>"     Devices"<12><15>		
+		.asciz  <245><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><256>" "<265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><12><15>
+MsgPre2:	.asciz	<246><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><265><271><12><15>
+MsgPre3:	.asciz	<33><240>"7   "<200><201><33><240>"4 - select, "<33><240>"7enter"<33><240>"4 - boot"<15>
+
+MsgAy:		.asciz	"AY (ASM)"
+MsgMidi:	.asciz	"MIDI"
+MsgCovox:	.asciz	"COVOX"
+MsgMouse:	.asciz	"MOUSE"
+MsgRtc:		.asciz	"CLOCK"
+MsgNoPart:	.asciz	<12><15><33><240>"2(!) first partition have size 0"<12><15>
+;		.ascii	<240><241><242><243><244><245><246><247><12><15>
+;		.ascii	<250><251><252><253><254><255><256><257><12><15>
+;		.ascii	<260><261><262><263><264><265><266><267><12><15>
+;		.ascii	<270><271><272><273><274><275><276><277><12><15>
+		.byte	0
+
+MsgCrc:		.ascii	<33><240>"6(?) block 0 have wrong CRC (?)"
+MsgOk:		.asciz	<33><240>"4"<220><33><240>"7 WDBOOT"<33><240>"4 v2.0"<12><15><12><15>
+MsgNocart:	.asciz	"(!) unable to access WD cartridge"
+MsgNoslot:	.asciz	"(!) unable to allocate PPU resident slot"
+MsgBusy:	.asciz	"(!) WD always busy (BSY=1)"
+MsgErr:		.asciz	"(!) generic WD error (ERR|DF=1)"
+MsgNordy:	.asciz	"(!) WD is not ready (BSY<>0 DRDY<>1)"
+MsgNodrq:	.asciz	"(!) DRQ not set after command"
+MsgOver:	.asciz	"(!) ... not now"
+		.even
+MsgErrTable:	MsgOk, MsgCrc, MsgNocart, MsgNoslot, MsgBusy, MsgErr, MsgNordy, MsgNodrq, MsgOver
+
+	.even
+
+; //////////////////////////////////////////////////////////////////////////////
+; // channel 2 procedures
+; //////////////////////////////////////////////////////////////////////////////
+
+PPCom:	.word	177777
+PPmsg:	.word	PPArr
+	.word	177777
+PPArr:	.byte	0				; 23334 return value (0 ok)
+PPCmd:	.byte	1				; 23335 command (1 alloc, 2 free, 10 read, 20 write, 30 run)
+	.word	32				; 23336 device type (32 ppu mem)
+PPApp:	.word	0				; 23340 argument(s) (PPU addr for mem operations)
+PPAcp:	.word	0				; 23342 CPU addr (length in words for mem allocate)
+PPLen:	.word	0				; 23344 length in words
+
+PPSen:	mov	#PPMsg, R2
+	mov	#5, R3
+	br	20$
+10$:	movb	(R2)+, @#176676
+20$:	tstb	@#176674
+	bpl	20$
+	sob	R3, 10$
+	return
+
+; run PPU code, R4 - addr in CPU, R5 - length in words
+PPRun:	movb	#1, PPCmd
+	mov	R5, PPAcp
+	call	PPSen
+	movb	#20, PPCmd
+	mov	R4, PPAcp
+	mov	R5, PPLen
+	call	PPSen
+	movb	#30, PPCmd
+	add	#4, PPApp			; skip identification
+	br	PPSen	
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU phase 2 - prepare all
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuPhase:
+	.rad50	"PHA"				; identification (not needed though)
+	.rad50	"SE2"
+	mtps	#200
+	mov	@#4, -(SP)			; save trap 4
+	mov	@#177054, -(SP)			; save mem map
+PpuCart =: .+2
+	movb	#^B00000010, @#177054		; default cassette #1, bank #1
+	mov	PC, R0
+	add	#PpuIn4-., R0
+	mov	R0, @#4
+	; prep regs
+	mov	#110000, R1
+	mov	#177010, R4
+	mov	#177014, R5
+; play note 1 on midi output (will trap 4 if absent, but its ok)
+MidiNote1:
+	mov	#C_MIDI_PORT, R0
+	mov	#77, (R0)+			; command: allow midi data in +2 reg
+	mov	#^xC0, (R0)			; select program on channel #0
+	mov	#^x09, (R0)			; glockenspiel
+	mov	#^x90, (R0)			; press note on channel #0
+	mov	#^x38, (R0)			; ..some note..
+	mov	#^x7F, (R0)			; max velocity
+; read absolute block 0 from HDD
+PpuRead0:
+	; check cartridge presence (and for what? we are booting from cartridge)
+	clr	R0
+	mov	#^C4, (R1)			; 0x04
+	tst	R0
+	beq	10$
+	; ERROR no cartridge
+	mov	#C_WDR_NOCART, PpuError
+	jmp	PpuExit
+10$:	; waiting for HDD to be prepared receive command
+	mov	(R1), R0
+	com	R0
+	bit	#^B10001000, R0			; test BSY and DRQ
+	beq	30$				; they are clear
+	mov	#^C4, (R1)			; 0x04
+	clr	R3
+20$:	mov	(R1), R0
+	bic	#^B1111111100111111, R0	
+	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
+	beq	30$
+	sob	R3, 20$
+	; HDD controller not ready
+	mov	#C_WDR_NORDY, PpuError
+	jmp	PpuExit
+30$:	; set HDD read block 0 command
+	mov	#110014, R1			; 110014 error code
+	mov	#^C1, -(R1)			; 110012 sectors count
+	mov	#^C0, -(R1)			; 110010 LBA low
+	mov	#^C0, -(R1)			; 110006 LBA med
+	mov	#^C0, -(R1)			; 110004 LBA high
+	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA28
+	mov	#^C40, -(R1)			; 110000 0x20 read sectors
+	; wait BSY=0
+	clr	R3
+40$:	movb	(R1), R0
+	com	R0
+	bpl	50$				; need BSY=0
+	sob	R3, 40$
+	mov	#C_WDR_BUSY, PpuError
+	jmp	PpuExit
+50$:	bit	#^B00100001, R0			; test ERR and DF bits
+	beq	60$				; no error or drive fault
+	mov	#C_WDR_ERR, PpuError		; generic error
+	jmp	PpuExit
+60$:	; wait DRDY and DRQ
+	clr	R0
+70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
+	beq	80$				; both set (inverted)
+	sob	R0, 70$
+	mov	#C_WDR_NODRQ, PpuError
+	jmp	PpuExit
+80$:	; read one block
+	mov	#End/2, (R4)
+	mov	#400, R3
+90$:	mov	@#110016, (R5)
+	inc	(R4)
+	sob	R3, 90$
+; do other things
+PpuDoOther:
+	; PPU mem for fast scroll 7170=1, 7136=2
+	mov	#1, @#7170
+	mov	#2, @#7136
+	; test devices
+	mov	#NewDevices/2, (R4)
+	mov	#5, R3
+10$:	clr	R0
+	tst	@0(R5)
+	inc	(R4)
+	mov	R0, (R5)
+	inc	(R4)
+	inc	(R4)
+	sob	R3, 10$
+; play note 2 on midi output
+MidiNote2:
+	mov	#C_MIDI_PORT+2, R0
+	mov	#^xC1, (R0)
+	mov	#^x09, (R0)
+	mov	#^x91, (R0)
+	mov	#^x3D, (R0)
+	mov	#^x7F, (R0)
+; restore saved and exit
+PpuExit:
+	mov	(SP)+, @#177054
+	mov	(SP)+, @#4
+	mov	#PPCom/2, (R4)
+PpuError =: .+2
+	mov	#000000, (R5)
+	mtps	#0
+	return
+; int 4 in PPU
+PpuIn4:	inc	R0
+	rti
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // WDR resident 
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuSta:	.rad50	"WD "				; let's use identification
+	.rad50	"SYS"
+	; queue resident
+	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr
+	mov	#1, @#7100			; set resident presence
+	inc	@#32				; flag for original WDR.SAV
+	return
+
+; core resident code
+@include wdrcore.mac
+
+End:
+	.end	Start

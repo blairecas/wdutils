@@ -1,0 +1,486 @@
+;	       Процедуры ввода/вывода мастер-блока
+;                =================================
+; 	        *** Written by Oleg H. mar 1997 ***
+;			   version 01.00
+
+	.TITLE	HDD-disk resident
+	.LIST	TTM
+	.DSABL	GBL
+	.ENABL	LC
+	.Mcall	.Push .Pop .print
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+;	debug  = 1
+
+	WD$csr = 176670
+	WD$vec = 144
+	pw$vec = 24
+	rsk2   = 176674
+	rdk2   = 176676
+	keyprc = 111144
+	dprc0  = 174152
+	disp   = 174164
+	rap    = 177010
+	rdp    = 177014
+	WD$reg = 177054
+	sysreg = 177716
+	casadr = 32
+	PASWRD = 342
+	ADRPRC = 7126		; Процесс рестарта
+	PPBase = 1100
+	TBase  = 1200-<I$1200-TCas>
+	WD$cqe = <1022-1010>/2
+	DefBot = 120
+	DefTim = 122
+	Hide   = 124
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+
+.if df,debug
+
+START:
+
+10$:	MOV	casnum,-(sp)
+	call	castst
+	tst	(sp)+
+	tst	r0
+	beq	casok
+	dec	casnum
+	bmi	e.bad
+	br	10$
+casok:	mov	casnum,r0
+	add	#'0,r0
+	movb	r0,slot
+	.print	#casf
+
+	
+	mov	casnum,-(sp)
+	mov	#250.,-(sp)
+	mov	#1.,-(sp)
+	mov	#0,-(sp)
+	mov	#760.,-(sp)
+	call	WDTST
+	tst	r0
+	bne	e.bad
+
+
+
+; retval = wdtst(track, cylinder, sector, Nsectors, casnum);
+
+	.REM	%
+	inc	@#40000+122
+
+	mov	#40000,-(sp)
+	CALL	SB.CLC
+	TST	(SP)+
+
+
+	mov	casnum,-(sp)
+	mov	#40000,-(sp)
+	call	sb$w
+	cmp	(sp)+,(sp)+
+	tst	r0
+	bne	e.bad
+
+
+	%
+
+e.good:	.print	#e$good
+	emt	350
+e.bad:	.print	#e$bad
+	emt	350
+
+
+CASNUM:	.Word	1
+
+e$good:	.asciz	/Exit good/
+e$bad:	.asciz	/Exit bad/
+casf:	.ascii	/casset found in /
+slot:	.byte	0,0
+
+	.even
+
+.endc
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+.macro	mput	adrmp
+	Jsr	r5,mput$
+	.word   adrmp
+.endm
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+; Проверка, есть ли кассета в слоте casnum
+;
+;
+; int casnum = { 0, 1 }
+; retval = CasTst(casnum);
+;
+; retval == 0 ; Кассета стоит в слоте
+; retval != 0 ; В этом слоте кассеты нет
+;
+CasTst::
+	mov	2(sp),r0		; Номер кассеты
+	bic	#^c1,r0			; Приведем к 1,0
+	movb	W$casN(r0),TN.Cas	; 6 или 16
+	
+	mput	Lo$TCa
+	mput	Ex$TCa
+
+	mov	#-1,WaiTes
+
+WaiTes	= :.+2
+1$:	mov	#0,r0
+	bmi	1$
+	
+	return
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+; Процедуры автодетект/чтения/записи суперблока из/в buff в 
+; винчестер, включенный в слот casnum 
+;
+; char buff[512]
+; int casnum = { 0, 1 }
+;
+; retval = sb$r(buff, casnum);
+;
+; retval == 0 ; All OK
+; retval != 0 ; I/O Error
+; 
+;
+
+SB$A::
+	call	$comon
+	Mput	Ex$SBA
+	.push	r0
+	mov	6(sp),r1		; Адрес буфера
+	mov	#400,r0
+5$:	tst	sb$wf
+	bmi	5$
+10$:	com	(r1)
+	swab	(r1)+
+	sob	r0,10$
+	.pop	r0
+	return
+SB$R::
+	call	$comon
+	Mput	Ex$SBR
+	return
+SB$W::
+	call	$comon
+	Mput	Ex$SBW
+	return
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+$comon:
+	mov	4(sp),SbBuf		; Адрес буфера
+	asr	SbBuf
+	
+	mov	6(sp),r0		; Номер кассеты
+	bic	#^c1,r0			; Приведем к 1,0
+	movb	W$casN(r0),NN.Cas	; 6 или 16
+	
+	mput	lo$sb
+	mov	#-1,sb$WF
+
+	call	@(sp)+	
+
+$$$com:	mov	(pc)+,r0
+sb$WF:	.blkw	1
+	bmi	$$$com
+	return
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+; Проверка, совпадает ли контрольная сумма в образе суперблока,
+; находящегося в buff
+;
+; char buff[512]
+; retval = sb.tst(buff);
+;
+; retval == 0 ; CRC OK
+; retval != 0 ; CRC BAD
+; 
+;
+Sb.Tst::
+	.push	<r2,r3>
+	jsr	r5,crcclc
+	.word	377
+	add	(r2),r1
+	.pop	<r3,r2>
+	bis	r1,r0
+	Return
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+; Подсчет контрольной сумма в образе суперблока,
+; находящегося в buff; подсчитанная КС записывается в образ суперблока
+; и делает его валидным.
+;
+; char buff[512]
+;
+; sb.clc(buff);
+;
+
+Sb.clc::
+	.push	<r2,r3>
+	jsr	r5,crcclc
+	.word	376
+	neg	r0
+	com	r1			; Эмуляция переполнения
+	mov	r0,(r2)+
+	mov	r1,(r2)
+	.pop	<r3,r2>
+	Return
+
+	; r0,r1 - CRC; Портит r2,r3
+crcclc:
+	mov	(r5)+,r3		; Счетчик цикла
+	mov	10(SP),r2		; Адрес буфера
+	clr	r0
+	clr	r1
+2$:	add	(r2)+,r0
+	adc	r1
+	sob	r3,2$
+	Rts	r5
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+; Тест на BAD-блоки некоей группы секторов винчестера
+;
+; int retval, track, cylinder, sector, Nsectors, casnum;
+; Nsectors <= 255 !!!
+;
+; retval = wdtst(track, cylinder, sector, Nsectors, casnum);
+;
+; retval == 0 ;  нет BAD-блоков
+; retval != 0 ;  есть BAD-блоки
+; 
+WdTst::
+	mov	sp,r0
+	tst	(r0)+
+	movb	(r0)+,wt$tlo
+	movb	(r0)+,wt$thi
+	mov	(r0)+,wt$sdh
+	bis	#240,wt$sdh
+	mov	(r0)+,wt$sct
+	mov	(r0)+,wt$nnn
+	mov	(r0),r0
+	bic	#^c1,r0
+	movb	W$casN(r0),NN$Cas
+	
+	mput	Lo$wdt
+	mput	Ex$wdt
+	
+	mov	#-1,wt$wf
+wt$wf	= :.+2
+1$:	mov	#0,r0
+	bmi	1$
+	return
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+; Процедура перестановки байтов в слове
+;
+; int x,y;
+;
+; y = swab(x);
+;
+
+Swab::
+	mov	2(sp),r0
+	swab	r0
+	return
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+MPut$:
+	call	5$		;  Подождем готовности К2
+1$:	call	4$		;  Вытолкнем в К2 первые 2 байта адрес
+	clrb	@-(r5)		;  Очистим байт ответа
+	jsr	r5,3$		;  Передадим 2 байта завершения 377
+	.word	-1		;
+	tstb	@(r5)+		;  Проверим ответ
+2$:	rts	r5		;  Выйдем в основную программу
+3$:	push	#2$		; 
+4$:	push	pc		;  Обеспечим повторный вход
+	movb	(r5)+,@#rdk2	;  Передача байта в К2
+5$:	tstb	@#rsk2		;  Ожидание готовности К2
+	bpl	5$		;
+	return			;  выход
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+
+sb.rw:
+Sb.A:
+	jsr	r3,sbcomm
+	mov	(r3),@(pc)+
+	.word	^c354			; Autodetect
+Sb.R:
+	jsr	r3,sbcomm
+	mov	(r3),@(pc)+
+	.word	177737			; Read
+Sb.W:
+	jsr	r3,sbcomm
+	mov	@(pc)+,(r3)
+	.word	177717			; Write
+Sbcomm:
+	tst	(sp)+
+
+	call	int.d
+2$:
+	call	int...
+	movb	@#110000,r4
+	bpl	2$			; Device BUSY
+	aslb	r4
+	bvc	2$
+
+	mov	#110014,r4
+10$:
+	mov	Sb.Tab-Sb.rw+PPbase-110014-2(r4),-(r4)
+	bmi	10$
+
+	mov	(r3)+,Sb.Cmd		; Команда пиши/читай
+	mov	(r3)+,-(r4)		; КОП в винчестер
+	Mov	#400,R0			; 400 - размер блока
+20$:
+	call	int...
+	movb	(r4),r1
+	bpl	20$			; BSY
+	asr	r1
+	bcc	sbIerr
+	bic	#^c44,r1
+	bne	20$
+
+	mov	#110016,r3
+SbBuf	= :.+2
+	mov	#1000,@#Rap
+
+sb.cmd:	.blkw	1
+	.word	Rdp
+	inc	@#Rap
+	sob	r0,sb.cmd
+sbIerr:				;///////////
+	mov	#sb$WF/2,@#rap
+	mov	r0,@#Rdp	; 0 - if OK; 400 - if error	
+int.e:
+	mov	R5,@#WD$reg
+	mtps	#0
+	return
+
+Int...:	call	int.e
+int.d:
+	mov	@#WD$reg,R5		; Сохраним старое состояние
+	mtps	(pc)
+NN.Cas	= .+2
+	mov	#6,@#WD$reg		; И подключим СПЗУ
+	return
+
+	;	110002		110004	110006	110010	110012
+	;	s:d:h		trk-hi	trk-lo	sct	Nsct
+	.word	<^c240> & 377,	^c0,	^c0,	^c1,	^c1
+Sb.Tab:
+	.Even
+sb.rw.e:
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+TCas:
+	mov	#4,r5
+	jsr	r4,1$
+				; Процедура обработки trap4
+	add	#2,(sp)		; Перескок, если было прерывание
+	rti
+1$:	mov	(r5),(sp)	; Сохраним старое знач. вектора 4
+	mov	r4,(r5)		; Захватим вектор 4
+
+	mov	#WD$reg,r3
+	push	(r3)
+	mov	(pc),r1		; 106407
+	mtps	pc		; Это круто !!!
+I$1200:	
+TN.Cas	= :.+2
+	mov	#6,(r3)		; (6) для загрузки WD$reg
+				; r4 > 0, мл. бит == 0 
+	tstb	-(r1)		; 106406
+	clr	r4		; Кассета найдена
+	pop	(r3)
+	mtps	r5		; #4	nZvc
+	mov	(sp)+,(r5)	; Освободим вектор 4
+	mov	#WaiTes/2,@#Rap
+	mov	r4,@#Rdp
+ret..:	return
+ETCas:
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+WD$T:
+
+	call	int$d
+2$:
+	call	int$$$
+	movb	@#110000,r4
+	bpl	2$			; Device BUSY
+	aslb	r4
+	bvc	2$
+
+	mov	#110014,r4
+10$:
+	mov	Wd$Tab-Wd$t+PPbase-110014-2(r4),r0
+	com	r0
+	mov	r0,-(r4)
+	bmi	10$
+			; * (r0 == ~0x40) -- Error code == TRUE
+20$:
+	call	int$$$
+	movb	(r4),r1
+	bpl	20$			; BSY
+	asr	r1
+	bcc	WDTerr
+	bic	#^c40,r1
+	bne	20$
+	clr	r0			; ErrCode
+WDTerr:				;///////////
+	mov	#wt$WF/2,@#rap
+	mov	r0,@#Rdp	; 0 - if OK; ~0x400 - if error	
+int$e:
+	mov	R5,@#WD$reg
+	mtps	#0
+	return
+
+Int$$$:	call	int$e
+int$d:
+	mov	@#WD$reg,R5		; Сохраним старое состояние
+	mtps	(pc)
+NN$Cas	= .+2
+	mov	#6,@#WD$reg		; И подключим СПЗУ
+	return
+	
+	.word	^b1111111101000000; 110000	КОП	Тест секторов
+wt$sdh:	.word	0		; 110002	S:D:H	Поверхность
+wt$thi:	.word	0		; 110004	trk-hi	Дорожка ст.
+wt$tlo:	.word	0		; 110006	trk-lo	Дорожка мл.
+wt$sct:	.word	0		; 110010	sector
+wt$nnn:	.word	0		; 110012	NN sectors
+WD$Tab:
+	.Even
+E$WD$T:
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+
+W$casN:	.byte	6,16
+
+Lo$TCa:	.byte	0,20,32,0		; Запись Тестов кассеты
+	.word	TBase
+	.Word	TCas,<ETCas-TCas>/2
+
+Ex$TCa:	.byte	0,30,32,0		; Тест кассеты
+	.word	TBase
+
+Lo$SB:	.byte	0,20,32,0		; Запись RW0-процедур
+	.word	PPBase
+	.Word	Sb.RW,<Sb.RW.e-Sb.RW>/2
+
+Ex$SbA:	.byte	0,30,32,0		; Автодетект
+	.word	PPBase+Sb.A-Sb.RW
+
+Ex$SbR:	.byte	0,30,32,0		; Чтение суперблока
+	.word	PPBase+Sb.R-Sb.RW
+
+Ex$SbW:	.byte	0,30,32,0		; Запись суперблока
+	.word	PPBase+Sb.W-Sb.RW
+
+Lo$WDt:	.byte	0,20,32,0		; Запись Тестa винчестера
+	.word	PPBase
+	.Word	WD$T,<E$WD$T-WD$T>/2
+
+Ex$WDt:	.byte	0,30,32,0		; Тест винчестера на bad-блоки
+	.word	PPBase
+
+;	.end	Start
+	.End

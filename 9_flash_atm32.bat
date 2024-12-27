@@ -1,0 +1,1 @@
+c:\Dist\Drivers\AvrDude\avrdude -v -p m324pa -c usbasp -U flash:w:release\m324pa.raw:r

@@ -1,0 +1,558 @@
+	.title	WDINIT
+	.enabl	LC
+
+	.macro	.print	X
+	mov	X, R0
+	call	PriStr
+	.endm
+
+	.macro	.prdec	X
+	mov	X, R0
+	call	PriDec
+	.endm
+
+C_PPU_READFD	= 1
+C_PPU_WDINFO	= 2
+C_PPU_READWD	= 3
+C_PPU_WRITEWD	= 4
+
+C_ERR_BUSY	= 1
+C_ERR_NORDY	= 2
+C_ERR_FLUSH	= 3
+C_ERR_NODEV	= 4
+C_ERR_NODRI	= 5
+C_ERR_ERR	= 6
+
+	.asect
+	.=0
+
+Start:	nop					; needed opcode
+	swab	R0				; high byte - FD#, bottom side
+	mov	R0, PPDev
+	call	PPSen
+	jmp	(SP)
+
+PPmsg:	.word	PPArr
+        .word	177777
+PPArr:	.byte	0				; 23334 return value (0 - OK)
+PPCmd:	.byte	10				; 23335 command (10 - read)
+PPDev:	.word	0				; 23336 device type (0x-FD, 32-ppu mem)
+PPApp:	.word	1000				; 23340 argument(s) (PPU addr for mem operations)
+PPAcp:	.word	1000				; 23342 CPU addr (length in words for mem allocate)
+PPLen:	.word	End-1000/2			; 23344 length in words
+; PPCmd: 10 - read, 20 - write, 30 - format
+; PPDev: word [FD#, bit7 = 0 - bottom side] [0x - FD, 01 - one side only]
+; PPApp: word [sector #] [track #] sectors start from 1, tracks from 0
+
+PPSen:	mov	#PPMsg, R2
+	mov	#5, R3
+	br	20$
+10$:	movb	(R2)+, @#176676
+20$:	tstb	@#176674
+	bpl	20$
+	sob	R3, 10$
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Main code
+; //////////////////////////////////////////////////////////////////////////////
+
+WdBufferW = End
+WdBufferR = End + 512.
+
+	.asect
+	.=1000
+
+Main:	mov	R0, PpuFdN			; put FD# for later use in PPU
+	; clean high addrs
+	mov	#End, R0
+	mov	#160000-End/2, R3
+	clr	(R0)+
+	sob	R3, .-2
+	; start PPU code
+	mov	#32, PPDev			; device is PPU memory
+	movb	#1, PPCmd			; command - allocate
+	mov	#End-PpuStart/2, PPAcp		; length in words (for allocate it must be here, not in PPLen!)
+	call	PPSen
+	movb	#20, PPCmd			; command - write to
+	mov 	#PpuStart, PPAcp		; mem addr in CPU
+	mov	#End-PpuStart/2, PPLen
+	call	PPSen
+	movb	#30, PPCmd			; command - run code
+	call	PPSen
+	call	WaitPpu				; wait for PPU to finish init
+	; clean up low addrs
+	clr	R0
+	mov	#2, (R0)+			; RTI opcode
+	clr	(R0)+
+	mov	#500-4/4, R3
+10$:	clr	(R0)+
+	mov	#200, (R0)+
+	sob	R3, 10$
+	; do we have WD error already?
+	tst	WdError
+	beq	20$
+	; maybe no WD
+	.print	#MsgNoWd
+	jmp	Exit
+20$:	.print	#MsgHello	
+	; output info
+	.print	#MsgCrl
+	mov	#C_PPU_WDINFO, PpuComm
+	call	WaitPpu
+	; cylinders
+	.print	#MsgI00
+	mov	01.*2+WdBufferR, MaxCyl
+	.prdec	01.*2+WdBufferR
+	.print	#MsgCrl
+	; heads
+	.print	#MsgI01
+	mov	03.*2+WdBufferR, MaxHea
+	.prdec	03.*2+WdBufferR
+	.print	#MsgCrl
+	; sectors
+	.print	#MsgI02
+	mov	06.*2+WdBufferR, MaxSec
+	.prdec	06.*2+WdBufferR
+	.print	#MsgCrl
+	; serial
+	.print	#MsgI03
+	mov	#10.*2+WdBufferR, R0
+	mov	#20., R3
+	call	PriMsb
+	; firmware
+	.print	#MsgI04
+	mov	#23.*2+WdBufferR, R0
+	mov	#8., R3
+	call	PriMsb
+	; model
+	.print	#MsgI05
+	mov	#27.*2+WdBufferR, R0
+	mov	#40., R3
+	call	PriMsb
+	.print	#MsgCrl
+	; check if sectors and heads are ok
+	cmp	MaxHea, #16.
+	bne	30$
+	cmp	MaxSec, #63.
+	beq	40$
+30$:	.print	#MsgBadWd
+	jmp	Exit
+40$:	.print	#MsgConfirm
+	call	GetKey
+	.print	#MsgCrl
+	.print	#MsgCrl
+
+; /////////////////////////////////////////
+; init procedure
+; /////////////////////////////////////////
+
+	mov	#WdData, R5
+
+WdInit:	; read FD sector
+	mov	#C_PPU_READFD, PpuComm
+	call	WaitPpu
+	tst	FdError
+	beq	10$
+	.print	#MsgFdError
+	mov	FdError, R0
+	call	PriDec
+	.print	#MsgCrl
+	br	Exit
+10$:	; set WD track, sector
+	mov	(R5)+, LbaLow
+	mov	(R5)+, LbaHigh
+	bmi	Done
+	; print info
+	.print	#MsgWdWrite
+	mov	LbaHigh, R0
+	call	PriDec
+	mov	#40, R0
+	call	PriChr
+	mov	LbaLow, R0
+	call	PriDec
+	; write it
+	mov	#C_PPU_WRITEWD, PpuComm
+	call	WaitPpu
+	mov	#MsgWriErr, R0
+	call	ChkWdError
+	; read from WD to compare
+	mov	#C_PPU_READWD, PpuComm
+	call	WaitPpu
+	mov	#MsgReaErr, R0
+	call	ChkWdError
+	mov	#WdBufferR, R0
+	mov	#WdBufferW, R1
+	mov	#256., R3
+50$:	cmp	(R0)+, (R1)+
+	beq	60$
+	.print	#MsgCompErr
+	br	Exit
+60$:	sob	R3, 50$
+	; ok then
+	mov	#15, R0
+	call	PriChr
+	; increase FD sector
+	inc	FdSector
+	cmp	FdSector, #11.
+	blo	WdInit
+	mov	#1, FdSector
+	inc	FdTrack
+	br	WdInit
+
+Done:	.print	#MsgCrl
+Exit:	.print	#MsgExit
+	halt
+
+
+; check for WD error
+ChkWdError:
+	tst	WdError
+	beq	90$
+	call	PriStr
+	mov	WdError, R0
+	call	PriDec
+	.print	#MsgCrl
+	tst	(SP)+
+	br	Exit
+90$:	return
+
+
+; wait for PPU is ready
+WaitPpu:	
+	tst	PpuComm
+	bne	WaitPpu
+	return
+
+; get key to R0 with channel 0
+GetKey:	tstb	@#177560
+	bpl	.-4
+10$:	movb	@#177562, R0
+	tstb	@#177560
+	bmi	10$
+	return
+
+; print character with channel 0
+PriChr:	tstb	@#177564
+	bpl	.-4
+	movb	R0, @#177566
+	return
+
+; print string with channel 0
+PriStr:	mov	R1, -(SP)
+10$:	movb	(R0)+, R1
+	beq	99$
+	tstb	@#177564
+	bpl	.-4
+	movb	R1, @#177566
+	br	10$
+99$:	mov	(SP)+, R1
+	return
+
+; print decimal number
+PriDec:	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	#MsgNum+6, R2
+	mov	#5., R3
+10$:	mov	R0, R1
+	clr	R0
+	div	#10., R0			; R0:R1 / 10. -> R0 - quotient, R1 - reminder
+	add	#'0, R1
+	movb	R1, -(R2)
+	sob	R3, 10$
+	mov	#MsgNum, R0
+	mov	(SP)+, R3
+	mov	(SP)+, R2
+	mov	(SP)+, R1
+	br	PriStr
+
+; print ascii msb words
+PriMsb:	tstb	@#177564
+	bpl	.-4
+	movb	1(R0), @#177566
+	beq	99$
+	tstb	@#177564
+	bpl	.-4
+	movb	(R0), @#177566
+	beq	99$
+	add	#2, R0
+	sub	#2, R3
+	bne	PriMsb
+99$:	.print	#MsgCrl
+	return
+
+
+PpuComm:	.word	0			; command to PPU 
+FdTrack:	.word	2			; floppy track# (cylinder# << 1 | side)
+FdSector:	.word	1			; floppy sector#
+FdError:	.word	0			; floppy error if any
+LbaHigh:	.word	0			; WD LBA high
+LbaLow:		.word	0			; WD LBA low 
+WdError:	.word	0			; WD error 
+MaxCyl:		.word	0
+MaxHea:		.word	0
+MaxSec:		.word	0
+BufExch:	.blkw	10			; some space to use by FD reading routines in PPU ROM
+
+MsgNum:		.asciz	"000000"
+MsgCrl:		.asciz	<12><15>
+MsgHello:	.asciz	"Will initialize WD device, all data on it WILL BE LOST"<12><15>
+MsgExit:	.asciz	<12><15>"Restart MS0511"<12><15>
+MsgNoWd:	.asciz	"(!) seems you haven't WD device"<12><15>
+MsgI00:		.asciz	"Cylinders: "
+MsgI01:		.asciz	"    Heads: "
+MsgI02:		.asciz	"  Sectors: "
+MsgI03:		.asciz	"   Serial: "
+MsgI04:		.asciz	" Firmware: "
+MsgI05:		.asciz	"    Model: "
+MsgBadWd:	.asciz	"(!) heads<>16, sectors<>63 - are not supported"<12><15>
+MsgConfirm:	.asciz	"Press any key to initialize (STOP or reset otherwise)"
+MsgFdError:	.asciz	<12><15>"(!) FD read error: "
+MsgWdWrite:	.asciz	"WD write (LBAlow LBAhigh): "
+MsgWriErr:	.asciz	<12><15>"(!) WD write error: "
+MsgReaErr:	.asciz	<12><15>"(!) WD read error: "
+MsgCompErr:	.asciz	<12><15>"(!) WD read and compare error"<12><15>
+		.even
+
+WdData:
+@include wdinit_data.mac
+		.word	-1, -1
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU code
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuStart:
+	mov	@#177054, PpuDefCart		; save memory map and cassette#
+	mov	#BufExch/2, @#23200		; put buf addr in CPU for FD operations
+	; test cartridges (TODO: normal IDE check, this is just presence of a cartridge test)
+	mov	#^B00000010, PpuWdCart		; bank #1, cassette #1
+	call	PpuChkCart
+	beq	PpuDone				; can write to IDE reg
+	mov	#^B00001010, PpuWdCart		; bank #1, cassette #2
+	call	PpuChkCart
+	beq	PpuDone
+	; WD not found or something else
+	mov	#WdError/2, @#177010
+	mov	#C_ERR_NODEV, @#177014
+
+
+; signal to CPU that we are finished command execution
+PpuDone:
+	mov	PpuDefCart, @#177054		; restore memory map and cassette#
+	mov	#PpuComm/2, @#177010
+	clr	@#177014
+	mtps	#0
+
+
+; main PPU cycle
+PpuMain:
+	trap	#0
+	mov	#PpuComm/2, @#177010		; check do we need to do something?
+	mov	@#177014, R0
+	beq	PpuMain
+	asl	R0
+	asl	R0
+	add	R0, PC
+	halt
+	halt
+	jmp	PpuReadFd
+	jmp	PpuWdInfo
+	jmp	PpuReadWd
+	jmp	PpuWriteWd
+
+
+; read sector from FD
+PpuReadFd:
+	mov	#4377, @#23334			; [10 - read] [377 - err code]
+	mov	PpuFdn, @#23336			; FD # (bottom side)
+	mov	#FdTrack/2, @#177010
+	mov	@#177014, R0
+	asr	R0
+	bcc	10$
+	bis	#100000, @#23336		; change to top side (lower bit of FdTrack)
+10$:	movb	R0, @#23340			; cylinder #
+	mov	#FdSector/2, @#177010
+	movb	@#177014, @#23341		; sector #
+	mov	#WdBufferW, @#23342		; addr of buffer in CPU
+	mov	#256., @#23344			; length in words
+	; reading procedure in ROM
+        call    @#176376       			; Останов программируемого таймера
+        jsr     R5, @#134210      		; Запуск таймера с последующим вызовом п/п
+        .word   10, 131224, 107  		; по адресу 131224
+20$:	; wait for result
+	movb	@#23334, R0
+	cmpb	#377, R0
+	beq	20$
+	; FD read result
+	mov	#FdError/2, @#177010
+	mov	R0, @#177014
+	jmp	PpuDone
+
+
+; run IDE identify command and read block
+PpuWdInfo:
+	mtps	#200
+	mov	PpuWdCart, @#177054		; select cassette #
+	mov	#110016, R5			; 110016 data port addr
+	mov	#110000, R4			; 110000 control port addr
+	call	PpuWaitComm
+	mov	#^C240, @#110002		; select master, CHS mode
+	mov	#^C0, @#110012
+	mov	#^C0, @#110010
+	mov	#^C0, @#110006
+	mov	#^C0, @#110004
+	mov	#^C<^xEC>, (R4)			; identify
+	mov	(R4), R0
+	com	R0
+	bne	10$
+	mov	#WdError/2, @#177010
+	mov	#C_ERR_NODRI, @#177014
+	jmp	PpuDone
+10$:	call	PpuWaitData
+	mov	#256., R3
+	mov	#WdBufferR/2, @#177010
+20$:	bit	#^B00001000, (R4)		; test DRQ
+	bne	.-4				; not ready
+	mov	(R5), R0
+	com	R0
+	mov	R0, @#177014
+	inc	@#177010
+	sob	R3, 20$
+	jmp	PpuDone
+
+
+; read sector from WD
+PpuReadWd:
+	mtps	#200
+	clr	WdError
+	mov	PpuWdCart, @#177054		; select cassette #
+	call	PpuWaitComm
+	call	PpuPrepare			; read/write prepare
+	mov	#^C40, (R4)			; 110000 command 0x20 - read sectors
+	call	PpuWaitData
+	mov	#WdBufferR/2, @#177010		; addr in CPU where to read
+20$:
+;	bit	#^B00001000, (R4)		; test DRQ
+;	bne	.-4				; not ready
+	mov	(R5), @#177014			; get data (not inverting this time)
+	inc	@#177010
+	sob	R3, 20$
+	jmp	PpuDone
+
+
+; write sector to WD
+PpuWriteWd:
+	mtps	#200
+	mov	PpuWdCart, @#177054		; select cassette #
+	call	PpuWaitComm
+	call	PpuPrepare			; read/write prepare
+	mov	#^C60, (R4)			; 110000 command 0x30 - write sectors
+	call	PpuWaitData
+	mov	#WdBufferW/2, @#177010		; addr in CPU from where to write
+20$:
+;	bit	#^B00001000, (R4)		; test DRQ
+;	bne	.-4				; buffer not ready
+	mov	@#177014, (R5)			; put data
+	inc	@#177010
+	sob	R3, 20$
+	call	PpuWaitComm
+	mov	#^C<^xE7>, (R4)
+	call	PpuWaitComm
+	jmp	PpuDone
+
+
+; prepare read/write WD
+PpuPrepare:
+	mov	#256., R3			; length in words
+	mov	#110016, R5			; 110016 data port addr
+	mov	#110014, R4			; 110014 error code
+	mov	#^C1, -(R4)			; 110012 sectors count (1)	
+	mov	#LbaLow/2, @#177010
+	mov	@#177014, R0
+	com	R0
+	mov	R0, -(R4)			; 110010 LBA low
+	swab	R0
+	mov	R0, -(R4)			; 110006 LBA med	
+	mov	#LbaHigh/2, @#177010
+	mov	@#177014, R0
+	com	R0
+	mov	R0, -(R4)			; 110004 LBA high
+	mov	#^C340, -(R4)			; 110002 0xE0 set master, LBA28
+	sub	#2, R4				; R4 = 110000 command/status
+	return
+
+
+; check ready to receive command
+PpuWaitComm:
+	mov	@#110000, R0
+	com	R0
+	bit	#^B10001000, R0			; test BSY and DRQ
+	beq	20$				; they are clear
+	; trying to reset then
+	mov	#^C4, @#110000			; 0x04 reset
+	nop					; not needed
+10$:	mov	@#110000, R0
+	bic	#^B1111111100111111, R0	
+	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1
+	bne	10$				; (we are inverted)
+	return
+20$:	; wait DRDY
+	mov	@#110000, R0
+	bit	#^B01000000, R0
+	bne	20$
+	return
+
+
+; check ready to read / write
+PpuWaitData:
+	movb	@#110000, R0
+	bpl	PpuWaitData
+	com	R0
+	bit	#^B00100001, R0			; test ERR and DF bits
+	beq	10$				; no error or drive fault
+	mov	#WdError/2, @#177010
+	mov	@#110014, R0
+	com	R0
+	mov	R0, @#177014
+	tst	(SP)+				; skip one call
+	jmp	PpuDone
+10$:	; wait DRDY + DRQ
+	mov	@#110000, R0
+	bic	#^B1111111110110111, R0
+	bne	10$
+	return
+
+
+; check IDE port with writing something there
+PpuChkCart:
+	mtps	#200
+	mov	@#4, -(SP)
+	mov	PC, R0
+	add	#PpuI4-., R0
+	mov	R0, @#4
+	clr	R0
+	mov	PpuWdCart, @#177054
+	mov	#^C1, @#110012
+	mov	(SP)+, @#4
+	mtps	#0
+	tst	R0
+	return
+
+
+; trap 4 int addr for testing
+PpuI4:	inc	R0
+	rti
+
+
+; PPU data
+PpuFdn:		.word	0
+PpuDefCart:	.word	0
+PpuWdCart:	.word	0
+
+
+End:
+	.end	Start

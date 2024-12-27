@@ -1,0 +1,339 @@
+;	                Драйвер винчестера
+;                :::::::::::::::::::::::::::::::::
+; 	        *** Written by Oleg H. mar 1996 ***
+;
+;
+; Литература:
+;
+;   1. RT11 Software support manual, chapter 7 (Device handlers)
+;        (c) Digital Equpment Corporation, 1983
+;
+;   2. Программное обеспечение ДВК, книга 5 (Руководство системного 
+;                                            программиста)
+;        НИИ "Научный центр", 1990
+;
+	.TITLE	HDD-disk handler
+	.LIST	TTM
+	.DSABL	GBL
+;	.ENABL	LC
+	.MCALL	.Drdef .Rofdf .Exit .Print
+	.rofdf
+;---------------------------------------------------------------------------
+;  Здесь необходимо установить параметры генерации Вашей О.С.
+; Установите "1" вместо "0" напротив тооо параметра, который поддерживается
+; Вашей О.С.
+	ERL$G  = 0		; Регистрация ошибок
+	MMG$T  = 0		; Поддержка расширенной памяти
+	TIM$IT = 1		; Поддержка тайм-аута
+	RTE$M  = 0		; ???
+
+	WD$csr = 176670
+	WD$vec = 144
+	pw$vec = 24
+	rsk2   = 176674
+	rdk2   = 176676
+	keyprc = 111144
+	dprc0  = 174152
+	disp   = 174164
+	rap    = 177010
+	rdp    = 177014
+	WD$reg = 177054
+	sysreg = 177716
+	casadr = 32		; 26		; with 600 !
+	PASWRD = 342
+	ADRPRC = 7126		; Процесс рестарта
+	NPart  = 8.
+	PHBase = 1200-<H$1200-InHBeg>	; 1100
+
+;---------------------------------------------------------------------------
+;	STATUS:	SPFUN$ разрешены обращения .SPFUN
+;		HNDLR$ вход в точку отмены даже при отсутствии эл-та очер-и
+;		SPECL$ устройство имеет специальную файловую структуру
+;		WONLY$ устройство только для вывода
+;		RONLY$ устройство только для  ввода
+;		FILST$ устройство прямого доступа со структурой RAFOS
+;                                          ????
+	.DRDEF	WD,53,Filst$!SpFun$!VarSz$,1.,WD$CSR,WD$VEC
+;---------------------------------------------------------------------------
+	.ASECT
+.=2
+area:	.byte	0,20,32,0		; Запись инсталлятора
+ppadr:	.word	PHBase
+Cp$Adr:	.Word	0,<InHEnd-InHBeg>/2
+
+.=70
+instal:
+	Add	r2,Cp$Adr	; For CLC -- (XXX + 0) --> (C == 0)
+	ror	r2
+	add	r2,r$adr
+	jsr	r5,mput$H
+	jsr	r5,mputH
+	.byte	0,30		; Пуск
+WDHins = .+2
+4$:	mov	#-1,(sp)	; Ждем ответи из ПМ 
+	bmi	4$		; -1 ответ не пришел
+	bne	8$		; Резидент сидит или нет железа
+	jsr	r0,5$		; Резидента нет, а железо есть
+	.asciz	/?WD-W-Resident not load/
+5$:	.print
+	pop	r0
+8$:	asr	(sp)+ 		; А была ли кассета ?
+	return
+	
+.IIF Gt,.-176,.ERROR .; Overflow space1
+;---------------------------------------------------------------------------
+.=200
+	br	Probe
+POK.S:	br	PriOK
+Probe:	jsr	r2,instal
+InHBeg:
+	mov	#4,r5
+	jsr	r4,1$
+				; Процедура обработки trap4
+	add	#2,(sp)		; Перескок, если было прерывание
+	rti
+1$:	mov	(r5),(sp)	; Сохраним старое знач. вектора 4
+	mov	r4,(r5)+	; Захватим вектор 4
+	mov	@#casadr,r2	; А резидент уже был загружен ? (r5 == 6)
+	bne	reeHit		; -да, уже был - сообщим в ЦП  (addr)
+	mov	#WD$reg,r3
+	push	(r3)
+	mov	(pc),r1		; 106407
+	mtps	pc		; Это круто !!!
+H$1200:	mov	r5,(r3)		; (6) для загрузки WD$reg
+				; r4 > 0, мл. бит == 0 
+	tstb	-(r1)		; 106406
+	br	casfnH
+ 	mov	#16,r5		; (16) для загрузки WD$reg
+ 	mov	r5,(r3)		; 
+	tstb	(r1)		; 106406
+	br	casfnH
+	comb	r4		; Кассеты нет - мл. бит == 1
+eHitin:	pop	(r3)
+	mtps	r2		; #0
+reeHit:	mov	(sp)+,@#4	; Освободим вектор 4
+R$adr = :.+2
+	mov	#<WDHIns-InHBeg>/2,@#Rap
+	mov	r4,@#Rdp
+	return
+casfnH:	clr	r4
+	br	eHitin
+InHEnd:
+
+mputH:	mov	(r5)+,area
+mput$H:	mov	pc,r0
+	add	#area-.,r0
+	jsr	r5,wait
+	jsr	r5,b2$put	; Выталкиваем 2 первых байта адреса
+	sxt	r0
+b2$put:	jsr	r5,(pc)
+b1$put:	movb	r0,@#rdk2
+	swab	r0
+wait:	tstb	@#rsk2
+	bpl	wait
+	rts	r5
+
+.IIF GT,.-400,.ERROR .; Overflow space2 (install check)
+;---------------------------------------------------------------------------
+.=400
+;
+;	Место для опишания SET-параметров драйвера
+; USE:
+;	OPTION:	Имя парметра
+;	VAL:	Значение != 0 , помещается в R3 при вызове SUBR
+;	SUBR:	Имя обслуживающей подпрограммы / должна быть в SPACE3 /
+;	MODE:	Описатель параметра , может быть:
+;		NO:	Допускает префикс "NO"(/ точка входа SUBR+4 /
+;		NUM:	Допускает указание десятичного  значения
+;		OCT:	Допускает указание восьмеричного значения
+;		Значение MODE помещается в R0 при вызове SUBR
+;
+;##	.DRSET	##OPTION,##VAL,##SUBR [,##MODE]
+;---------------------------------------------------------------------------
+	.DRSET	SYSGEN,sysptr,SYSGN
+	.DRSET	Roll,240,SetRol,NO
+PriOK:
+	jsr	r3,1$
+	.asciz	<10>/OK/<12><15>
+	.Even
+1$:	Jsr	r2,@#StrLst-WDboot
+	mov	#240,@#Rorr-WDboot
+	pop	r3
+	br	Probe
+
+
+sysgn:
+	mov	(r3),r3
+	mov	sysgen(r3),60
+	bic	#^c7,60
+	return
+
+SetRol:	mov	(pc)+,r3
+	trap	0
+	mov	r3,Rorr
+	cmp	r3,#240
+	beq	1$
+	mov	(pc)+,r3
+	br	PriOK-POK.S+.
+1$:	mov	r3,POK.S
+	return
+
+.IIF	GE,.-1000,.ERROR .; Overflow space3
+;---------------------------------------------------------------------------
+.=1000
+;	Секция инициирования ввода/вывода.
+;  Все регистры доступны для использования.
+; Управление шюда передается, как только в очередь к драйверу
+; ставится очередной элемент. Его адрес заносится в ##NAMECQE
+;       Смещения элементов очереди:
+;        Q$LINK -4 Адрес след. элемента очереди
+;        Q$CSW  -2 Указатель на слово состояния канала
+;     *  Q$BLKN  0 Номер блока на устройстве
+;        Q$FUNC  2 Код специальной функции
+;        Q$JNUM  3 Номер задачи
+;        Q$UNIT  3 Номер устройства
+;     *  Q$BUFF  4 Адрес буфера
+;     *  Q$WCNT  6 Количество слов для чтения (if Q$WCNT < 0 then write)
+;        Q$COMP 10 Адрес процедуры завершения
+; В этой секции необходимо разрешить прерывания от устройства и выйти
+; по RETURN. Если устройство не имеет прерываний, то в этой секции 
+; необходимо произвести весь ввод/вывод и выйти через .DRFIN .
+; В последнем случае необходимо удалить из тела драйвера секцию
+; обработки прерываний и установить фиктивную метку ##NAMEINT.
+;	
+	.DRBEG	WD
+.=.-2
+	mov	#paswrd,@#WD$vec+2
+;	return
+;---------------------------------------------------------------------------
+;	Секция обработки прерывания.
+;  Сюда передается управление при прерывании от устройства. Здесь необходимо
+; произвести ввод/вывод; при его завершении или ошибке управление передать
+; на .DRFIN, а если необходимо ждать след. прерывания, ъыйти по RETURN.
+; Для использования доступны R4 и R5.
+;  На метку ##ABORT управление передается при преждевременном снятии 
+; программы, инициировавшей ввод/вывод.
+
+	.DRAST WD,2
+
+	mov	WDcqe,r4
+	bisb	@#WD$vec+2,@-(r4)	; В PSW псевдовектора - код ошибки
+done:	.DRFIN WD
+
+
+;    После .DRFIN могут быть размещены подпрограммы резилентной части 
+; драйвера.
+;---------------------------------------------------------------------------
+	.DRBOT	WD,boot+2,rdbuf,<UBUS,QBUS>
+
+	.= WDboot+14
+	.word	report-WDboot,0		; bpt	- 14
+	.word	ioerr-WDboot,0		; iot	- 20
+	.= WDboot+34
+	.word	plk.sh-WDboot,0		; trap's- 34
+
+	.= WDboot+100			; Заблокируем таймерные
+	.word	102			; прерывания...
+	rti
+
+	.= WDboot+210
+;---------------------------------------------
+rdbuf:
+	mov	#SbRead-WDboot,r3
+	mov	r0,(r3)+			; BLKN
+	inc	r3				; FUNC
+	movb	@#b$devu,(r3)+			; - Номер приводa
+	mov	r2,(r3)+			; Buff
+	mov	r1,(r3)+			; Wcnt
+Rd.Buf:
+	Mov	@#WD$vec,-(sp)
+	Mov	#Sb$Lc-WDboot,@#WD$vec
+	Mov	#paswrd,@#WD$vec+2		; Запрос к резиденту
+
+	mov	(pc)+,@(pc)+
+	bpt
+	.word	664+6				; REPORT
+	mov	(pc)+,@(pc)+
+	iot
+	.word	664				; BIOERR
+
+Rorr:	trap	0				; Крутануть палку
+
+10$:	tstb	@#WD$vec+2
+	bmi	10$
+	bne	ioerr
+	Mov	(sp)+,@#WD$vec
+	return
+boot:
+	mov	#10000,sp			; Установить стек с 10000
+	movb	r0,D.num
+	mov	r0,r5
+;	mov	#2,r0				; Номер блока на диске
+;	mov	#4*400,r1			; количество слов
+;	mov	#1000,r2			; адрес в ОЗУ ЦП
+	call	rd.buf				; Чтение вторичного загрузчика
+;		Передадим вторичному загрузчику ; 
+	mov	#rdbuf-WDboot,@#b$read		; - Адрес процедуры чтения
+	mov	#b$dnam,@#b$devn		; - Имя устройства в .RAD50
+	mov	r5,@#b$devu			; - Номер приводa
+	jmp	@#b$boot			; Пуск вторичногo загрузчика
+
+;--------------------------------------------
+
+SbRead:	.word	2			; Q$blkn
+	.byte	0			; Q$func 
+D.num:	.byte	-1			; Q$unit
+	.word	1000			; Q$buff
+	.word	4*400			; Q$wcnt
+	.Word	SbRead-WDboot		; ...CQE
+	.blkb	WDInt-WDcqe-2
+Sb$Lc:	rti
+
+strput:	mov	(r2)+,r3
+strlst:
+1$:	tstb	@#177564
+	bpl	1$
+	movb	(r3)+,@#177566
+	bne	1$
+	rts	r2
+
+ioerr:	jsr	r1,report
+	.word	io$err-WDboot
+report:
+	jsr	r2,strput
+	.word	bootf-WDboot
+	mov	(r1),r3
+	jsr	r2,strlst
+	jsr	r2,strput
+	.word	crlflf-WDboot
+	halt
+	br	.-2
+
+Plk.Sh:
+	mov	(sp),r3
+	inc	-(r3)
+	bicb	#^c3,(r3)
+	movb	(r3),r3
+	movb	palka-WDboot(r3),plkchr
+
+	jsr	r2,strput
+	.word	plkstr-WDboot
+	rti
+
+BOOTF:	.byte	33,'J
+	.ASCIZ	<CR><LF><LF>"?WdBoot-U-"
+CRLFLF:	.byte	CR,LF,LF,7,0
+Io$err:	.asciz	"I/O error"
+
+palka:	.asciz	"|/-\"
+plkstr:	.ascii	<15>"WdBoot: "
+plkchr:	.asciz	"*"
+
+
+WDbend:
+.IIF	GE, . - WDboot-1000, .ERROR .; Overflow space4 (boot rotinue)
+
+;	.DREND WD
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.End

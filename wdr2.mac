@@ -1,0 +1,216 @@
+	.title	WDR2
+
+	.asect
+	.=1000
+
+Start:	; run phase
+	mov	#PpuPha, R4
+	mov	#PpuSta-PpuPha/2, R5
+	call	PPRun
+	; wait for answer
+	mov	PpuComm, R1
+	bmi	.-4
+	; release phase ppu mem
+	movb	#2, PPCmd
+	sub	#4, PPApp			; include identification (2 words)
+	call	PPSen				; release PPU mem
+	; print result
+	mov	R1, R0
+	emt	351
+	; was it fatal error?
+	cmp	R1, #1
+	bhi	Exit
+	; run resident
+	mov	#PpuSta, R4
+	mov	#End-PpuSta/2, R5
+	call	PPRun
+Exit:	clr	R0				; .hreset before exit	
+	emt	350				; .exit
+
+PpuComm:	.word	177777
+PpuCart:	.word	^B00000010
+PpuSlot:	.word	7100
+
+MsgAlready:	.asciz	"(!) resident code already running"
+MsgNoDevice:	.asciz	"(!) no WD device detected"
+MsgNoSlot:	.asciz	"(!) no empty slot for resident code"
+
+MsgBusy:	.asciz	"(!) timeout waiting BSY off (busy)"
+MsgErr:		.asciz	"(!) bit ERR was set (error)"
+MsgNoRdy:	.asciz	"(!) timeout waiting DRDY set (not ready)"
+MsgNoDrq:	.asciz	"(!) timeout waiting DRDY, DRQ set (not ready / no data)"
+MsgOver:	.asciz	"(!) block # is >= partition size"
+MsgNoMem:	.asciz	"(!) can't allocate PPU memory"
+
+MsgCrc:		.ascii	"(?) invalid CRC of block 0"<12><15>
+MsgOk:		.asciz	"WD.SYS resident code installed"
+		.even
+
+; MsgNum:	.asciz	"000000  "
+;	.even
+;
+;Debug:	mov	#PpuStart, R5
+;	mov	#10., R3
+;10$:	mov	(R5)+, R0
+;	call	PriDec
+;	sob	R3, 10$
+;	return
+;
+; print string with channel 0
+;PriStr:	mov	R1, -(SP)
+;10$:	movb	(R0)+, R1
+;	beq	99$
+;	tstb	@#177564
+;	bpl	.-4
+;	movb	R1, @#177566
+;	br	10$
+;99$:	mov	(SP)+, R1
+;	return
+;
+; print decimal number
+;PriDec:	mov	R1, -(SP)
+;	mov	R2, -(SP)
+;	mov	R3, -(SP)
+;	mov	#MsgNum+6, R2
+;	mov	#5., R3
+;10$:	mov	R0, R1
+;	clr	R0
+;	div	#10., R0			; R0:R1 / 10. -> R0 - quotient, R1 - reminder
+;	add	#'0, R1
+;	movb	R1, -(R2)
+;	sob	R3, 10$
+;	mov	#MsgNum, R0
+;	mov	(SP)+, R3
+;	mov	(SP)+, R2
+;	mov	(SP)+, R1
+;	br	PriStr
+
+; //////////////////////////////////////////////////////////////////////////////
+; // channel 2 procedures
+; //////////////////////////////////////////////////////////////////////////////
+
+PPmsg:	.word	PPArr
+	.word	177777
+PPArr:	.byte	0				; 23334 return value (0 ok)
+PPCmd:	.byte	1				; 23335 command (1 alloc, 2 free, 10 read, 20 write, 30 run)
+	.word	32				; 23336 device type (32 ppu mem)
+PPApp:	.word	0				; 23340 argument(s) (PPU addr for mem operations)
+PPAcp:	.word	0				; 23342 CPU addr (length in words for mem allocate)
+PPLen:	.word	0				; 23344 length in words
+
+PPSen:	mov	#PPMsg, R2
+	mov	#5, R3
+	br	20$
+10$:	movb	(R2)+, @#176676
+20$:	tstb	@#176674
+	bpl	20$
+	sob	R3, 10$
+	return
+
+; run PPU code, R4 - addr in CPU, R5 - length in words
+PPRun:	movb	#1, PPCmd
+	mov	R5, PPAcp
+	call	PPSen
+	movb	#20, PPCmd
+	mov	R4, PPAcp
+	mov	R5, PPLen
+	call	PPSen
+	movb	#30, PPCmd
+	add	#4, PPApp			; skip identification
+	br	PPSen	
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU phase 2 - prepare all
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuPha:	.rad50	"WD "
+	.rad50	"SYS"
+	mtps	#200
+	call	PpuIni
+	mov	#PpuComm/2, @#177010
+	mov	R0, @#177014
+	mtps	#0
+	return
+
+PpuIni:	; search for already running
+	mov	PC, R5
+	add	#PpuPha-., R5			; R5 current block addr in PPU
+	mov	#23660, R0
+	clr	R2
+10$:	add	R2, R0
+	mov	(R0)+, R1			; <>0 memory block is used
+	tst	(R0)+				; addr of previous descriptor (0 if none)
+	mov	(R0)+, R2			; size of block
+	cmp	R0, R5				; current block or higher?
+	bhis	20$				; search ends, not found
+	tst	R1				; is that block empty?
+	beq	10$				; yes
+	cmp	(R5), (R0)			; compare "WD "
+	bne	10$
+	cmp	2(R5), 2(R0)			; compare "SYS"
+	bne	10$
+	; seems we've found already running
+	mov	#MsgAlready, R0
+	return
+
+20$:	; check for WD device and get cartridge #
+	mov	#^B00000010, R0			; cassette #1, bank #1
+	call	CheckCart
+	beq	30$
+	mov	#^B00001010, R0			; cassette #2, bank #1
+	call	CheckCart
+	beq	30$
+	; not found
+	mov	#MsgNoDevice, R0
+	return
+30$:	mov	#PpuCart/2, @#177010
+	mov	R0, @#177014
+
+PpuSlo:	; check empty resident slot
+	mov	#7104, R0
+	mov	#10., R3
+10$:	tst	-(R0)
+	beq	20$
+	sob	R3, 10$
+	mov	#MsgNoSlot, R0
+	return
+20$:	mov	#PpuSlot/2, @#177010
+	mov	R0, @#177014
+
+
+; check WD register presence on R0 mapping
+CheckCart:	
+	mov	@#177054, -(SP)
+	mov	@#4, -(SP)
+	mov	PC, R1
+	add	#100$-., R1
+	mov	R1, @#4
+	movb	R0, @#177054			; set testing memory mapping
+	clr	R1				; it's a flag for trap
+	mov	#^C1, @#110012			; put something to one of WD registers
+	mov	(SP)+, @#4
+	mov	(SP)+, @#177054
+	tst	R1
+	return
+100$:	inc	R1
+	rti
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // WDR resident 
+; //////////////////////////////////////////////////////////////////////////////
+
+PpuSta:	.rad50	"WD "				; let's use identification
+	.rad50	"SYS"
+	; queue resident
+	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr
+	mov	#1, @#7100			; set resident presence
+	inc	@#32				; flag for original WDR.SAV
+	return
+
+; core resident code
+@include wdrcore.mac
+
+End:
+	.end	Start
