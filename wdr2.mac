@@ -188,7 +188,7 @@ CheckCart:
 	mov	R1, @#4
 	movb	R0, @#177054			; set testing memory mapping
 	clr	R1				; it's a flag for trap
-	mov	#^C1, @#110012			; put something to one of WD registers
+	mov	#^C4, @#110000			; put something to one of WD registers
 	mov	(SP)+, @#4
 	mov	(SP)+, @#177054
 	tst	R1

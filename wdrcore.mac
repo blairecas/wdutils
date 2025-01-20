@@ -42,10 +42,10 @@ WdrOperType	=: .+2
 	; get params, Oleg H. code
 	dec	(R4)
 	mov	(R5), (R4)			; addr of WS.SYS int addr
-	ror	(R4)				; /2 as we are using CPU RAM, C must be cleared already by dec
+	ror	(R4)				; /2 as we are using CPU RAM, C cleared by CLR
 	sub	#5, (R4)			; skip something (queue)
 	mov	(R5), (R4)			; get addr of queue element
-	ror	(R4)				; /2
+	ror	(R4)				; /2, C cleared by SUB (must be..)
 	mov	(R5), R3			; [BLKN] block #
 	inc	(R4)
 	mov	(R5), R1			; [UNIT|FUNC] high byte is x in WDx, low byte can be 373
@@ -77,7 +77,8 @@ WdrOperType	=: .+2
 	mov	R3, WdrLbaLow
 24$:	inc	(R4)
 	mov	(R5), R2			; [BUFF] R2
-	ror	R2				; C is cleared by inc
+	clc					; just in case
+	ror	R2				; /2
 	inc	(R4)
 	mov	(R5), R3			; [WCNT] R3 data size in words
 	beq	WdrEx0				; do nothing if zero
