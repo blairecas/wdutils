@@ -110,10 +110,10 @@ WdrEx0:	; set error result
 	mov	R1, (R5)			; restore CPU int 24
 10$:	mov	(SP)+, @#177054
 
-WdrEx1:	; re-queue resident
+WdrEx1:	; (re)queue resident
+	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr to 'test subroutine'
+	mov	#1, @#7100			; set resident presence to 'test subroutine'
 	mov	(SP)+, R0
-	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr
-	mov	#1, @#7100			; set resident presence
 	mtps	#0
 	jmp	@#174170			; jump to process dispatcher
 
@@ -134,6 +134,7 @@ WdrWaitComm:
 
 
 ; check ready to read / write
+; R1 must be #110000
 WdrWaitData:
 	; check BSY
 	movb	(R1), R0

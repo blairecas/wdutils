@@ -6,7 +6,8 @@
 Start:	; run phase
 	mov	#PpuPha, R4
 	mov	#PpuSta-PpuPha/2, R5
-	call	PPRun
+	call	PPMem
+	call	PPWru
 	; wait for answer
 	mov	PpuComm, R1
 	bmi	.-4
@@ -14,26 +15,54 @@ Start:	; run phase
 	movb	#2, PPCmd
 	sub	#4, PPApp			; include identification (2 words)
 	call	PPSen				; release PPU mem
-	; print result
+	; maybe print result and exit
 	mov	R1, R0
-	emt	351
-	; was it fatal error?
-	cmp	R1, #1
-	bhi	Exit
-	; run resident
+	beq	10$
+	emt	351				; .print
+	emt	350				; .exit
+10$:	; make partitions table
+	mov	#End+2, R5
+	mov	#WdrPartTable+4, R0		; partitions table addr (+1 element)
+	mov	#1, R1				; partitions low addr
+	clr	R2				; partitions high addr
+	mov	#24., R3
+20$:	add	(R5)+, R1
+	adc	R2
+	mov	R2, (R0)+			; set part table high
+	mov	R1, (R0)+			; set part table low
+	sob	R3, 20$
+	; compute CRC
+	mov	#MsgOk, R0
+	mov	#End, R5
+	clr	R1
+	clr	R2
+	mov	#377, R3
+30$:	add	(R5)+, R1
+	adc	R2
+	sob	R3, 30$
+	add	(R5), R2
+	bis	R1, R2
+	beq	40$
+	mov	#MsgCrc, R0
+40$:	emt	351				; .print
+	; allocate mem for resident
 	mov	#PpuSta, R4
 	mov	#End-PpuSta/2, R5
-	call	PPRun
-Exit:	clr	R0				; .hreset before exit	
+	call	PPMem
+	; correct value for queue addr and cartridge map
+	mov	PPApp, R0			; PpuSta addr in PPU
+	add	#WdrMain-PpuSta, R0		; WdrMain addr in PPU
+	mov	R0, WdrEx1+2			; set as argument #1 of first mov
+	mov	PpuCart, WdrCart		; set cartridge map
+	; write, run
+	call	PPWru
 	emt	350				; .exit
 
 PpuComm:	.word	177777
 PpuCart:	.word	^B00000010
-PpuSlot:	.word	7100
 
 MsgAlready:	.asciz	"(!) resident code already running"
 MsgNoDevice:	.asciz	"(!) no WD device detected"
-MsgNoSlot:	.asciz	"(!) no empty slot for resident code"
 
 MsgBusy:	.asciz	"(!) timeout waiting BSY off (busy)"
 MsgErr:		.asciz	"(!) bit ERR was set (error)"
@@ -107,17 +136,18 @@ PPSen:	mov	#PPMsg, R2
 	sob	R3, 10$
 	return
 
-; run PPU code, R4 - addr in CPU, R5 - length in words
-PPRun:	movb	#1, PPCmd
+; allocate (R5 - length in words)
+PPMem:	movb	#1, PPCmd
 	mov	R5, PPAcp
-	call	PPSen
-	movb	#20, PPCmd
+	br	PPSen
+; write & run (R4 - addr, R5 - length in words)
+PPWru:	movb	#20, PPCmd
 	mov	R4, PPAcp
 	mov	R5, PPLen
 	call	PPSen
 	movb	#30, PPCmd
 	add	#4, PPApp			; skip identification
-	br	PPSen	
+	br	PPSen
 
 
 ; //////////////////////////////////////////////////////////////////////////////
@@ -127,9 +157,11 @@ PPRun:	movb	#1, PPCmd
 PpuPha:	.rad50	"WD "
 	.rad50	"SYS"
 	mtps	#200
+	mov	@#177054, -(SP)
 	call	PpuIni
 	mov	#PpuComm/2, @#177010
 	mov	R0, @#177014
+	mov	(SP)+, @#177054
 	mtps	#0
 	return
 
@@ -156,10 +188,10 @@ PpuIni:	; search for already running
 
 20$:	; check for WD device and get cartridge #
 	mov	#^B00000010, R0			; cassette #1, bank #1
-	call	CheckCart
+	call	PpuCC
 	beq	30$
 	mov	#^B00001010, R0			; cassette #2, bank #1
-	call	CheckCart
+	call	PpuCC
 	beq	30$
 	; not found
 	mov	#MsgNoDevice, R0
@@ -167,22 +199,65 @@ PpuIni:	; search for already running
 30$:	mov	#PpuCart/2, @#177010
 	mov	R0, @#177014
 
-PpuSlo:	; check empty resident slot
-	mov	#7104, R0
-	mov	#10., R3
-10$:	tst	-(R0)
-	beq	20$
-	sob	R3, 10$
-	mov	#MsgNoSlot, R0
+PpuBl0:	; read absolute block 0
+	mov	#110000, R1			; status reg
+	mov	#177010, R4
+	mov	#177014, R5
+	; prepare command
+	mov	(R1), R0
+	com	R0
+	bit	#^B10001000, R0			; test BSY and DRQ
+	beq	30$				; they are clear
+	mov	#^C4, (R1)			; 0x04
+	clr	R3
+20$:	mov	(R1), R0
+	bic	#^B1111111100111111, R0	
+	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
+	beq	30$
+	sob	R3, 20$
+	; HDD controller not ready
+	mov	#MsgNoRdy, R0
 	return
-20$:	mov	#PpuSlot/2, @#177010
-	mov	R0, @#177014
+30$:	; set HDD read block 0 command
+	mov	#110014, R1			; 110014 error code
+	mov	#^C1, -(R1)			; 110012 sectors count
+	mov	#^C0, -(R1)			; 110010 LBA low
+	mov	#^C0, -(R1)			; 110006 LBA med
+	mov	#^C0, -(R1)			; 110004 LBA high
+	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA28
+	mov	#^C40, -(R1)			; 110000 0x20 read sectors
+	; wait BSY=0
+	clr	R3
+40$:	movb	(R1), R0
+	com	R0
+	bpl	50$				; need BSY=0
+	sob	R3, 40$
+	mov	#MsgBusy, R0
+	return
+50$:	bit	#^B00100001, R0			; test ERR and DF bits
+	beq	60$				; no error or drive fault
+	mov	#MsgErr, R0			; generic error
+	return
+60$:	; wait DRDY and DRQ
+	clr	R0
+70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
+	beq	80$				; both set (inverted)
+	sob	R0, 70$
+	mov	#MsgNoDrq, R0
+	return
+80$:	; read one block
+	mov	#End/2, (R4)
+	mov	#400, R3
+90$:	mov	@#110016, (R5)
+	inc	(R4)
+	sob	R3, 90$
 
+PpuEx:	; seems all is OK for now
+	clr	R0
+	return
 
 ; check WD register presence on R0 mapping
-CheckCart:	
-	mov	@#177054, -(SP)
-	mov	@#4, -(SP)
+PpuCC:	mov	@#4, -(SP)
 	mov	PC, R1
 	add	#100$-., R1
 	mov	R1, @#4
@@ -190,7 +265,6 @@ CheckCart:
 	clr	R1				; it's a flag for trap
 	mov	#^C4, @#110000			; put something to one of WD registers
 	mov	(SP)+, @#4
-	mov	(SP)+, @#177054
 	tst	R1
 	return
 100$:	inc	R1
@@ -203,11 +277,10 @@ CheckCart:
 
 PpuSta:	.rad50	"WD "				; let's use identification
 	.rad50	"SYS"
-	; queue resident
-	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr
-	mov	#1, @#7100			; set resident presence
 	inc	@#32				; flag for original WDR.SAV
-	return
+	clr	@#7076				; remove this process presence
+	mov	#7060, (SP)			; processes 'presence' start addr
+	jmp	WdrEx1				; (re)queue resident and go
 
 ; core resident code
 @include wdrcore.mac

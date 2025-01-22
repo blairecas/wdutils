@@ -621,11 +621,10 @@ PpuIn4:	inc	R0
 
 PpuSta:	.rad50	"WD "				; let's use identification
 	.rad50	"SYS"
-	; queue resident
-	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr
-	mov	#1, @#7100			; set resident presence
 	inc	@#32				; flag for original WDR.SAV
-	return
+	clr	@#7076				; remove this process presence
+	mov	#7060, (SP)			; processes 'presence' start addr
+	jmp	WdrEx1				; (re)queue resident and go
 
 ; core resident code
 @include wdrcore.mac
