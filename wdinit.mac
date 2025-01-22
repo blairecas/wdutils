@@ -132,15 +132,16 @@ Main:	mov	R0, PpuFdN			; put FD# for later use in PPU
 	mov	#40., R3
 	call	PriMsb
 	.print	#MsgCrl
-	; check if sectors and heads are ok
-	cmp	MaxHea, #16.
-	bne	30$
-	cmp	MaxSec, #63.
-	beq	40$
-30$:	.print	#MsgBadWd
-	jmp	Exit
-40$:	.print	#MsgConfirm
+	.print	#MsgConfirm
+GPnum:	; get number of partitions to init
 	call	GetKey
+	cmp	R0, #'1
+	blo	GPnum
+	cmp	R0, #'8
+	bhi	GPnum
+	call	PriChr
+	sub	#'0, R0
+	mov	R0, PartNum
 	.print	#MsgCrl
 	.print	#MsgCrl
 
@@ -148,23 +149,100 @@ Main:	mov	R0, PpuFdN			; put FD# for later use in PPU
 ; init procedure
 ; /////////////////////////////////////////
 
-	mov	#WdData, R5
+WdBlk0:	; create block 0
+	mov	#WdBufferW, R0
+	mov	#256., R3
+	clr	(R0)+
+	sob	R3, .-2
+	mov	#WdBufferW, R0
+	movb	MaxSec, (R0)+
+	movb	MaxHea, (R0)+
+	mov	PartNum, R3
+	mov	#177777, (R0)+
+	sob	R3, .-4
+	mov	#'0, WdBufferW + ^x50			; last used partition (ascii code)
+	mov	#100., WdBufferW + ^x52			; ticks to wait for boot
+	mov	#1000., WdBufferW + ^x54		; don't even know what's this
+	; count checksum
+	mov	#WdBufferW, R0
+	clr	R1
+	clr	R2
+	mov	#376, R3
+10$:	add	(R0)+, R1
+	adc	R2
+	sob	R3, 10$
+	neg	R1
+	com	R2
+	mov	R1, (R0)+
+	mov	R2, (R0)
+	; write it
+	clr	LbaLow
+	clr	LbaHigh
+	call	WriteAndCompare
 
-WdInit:	; read FD sector
+WdWSys:	; write bootable system on first partition
+	mov	#WdData, R5
+10$:	; read FD sector
 	mov	#C_PPU_READFD, PpuComm
 	call	WaitPpu
 	tst	FdError
-	beq	10$
+	beq	20$
 	.print	#MsgFdError
 	mov	FdError, R0
 	call	PriDec
 	.print	#MsgCrl
-	br	Exit
-10$:	; set WD track, sector
+	jmp	Exit
+20$:	; write and compare then
 	mov	(R5)+, LbaLow
 	mov	(R5)+, LbaHigh
 	bmi	Done
-	; print info
+	call	WriteAndCompare
+	call	IncFdSector
+	br	10$
+
+Done:	.print	#MsgCrl
+	.print	#MsgComplete
+Exit:	.print	#MsgExit
+	halt
+
+
+; increase FD sector
+IncFdSector:
+	inc	FdSector
+	cmp	FdSector, #11.
+	blo	99$
+	mov	#1, FdSector
+	inc	FdTrack
+99$:	return
+
+
+; write 
+WriteAndCompare:
+	; write
+	call	PrintMsgWrite
+	mov	#C_PPU_WRITEWD, PpuComm
+	call	WaitPpu
+	mov	#MsgWriErr, R0
+	call	ChkWdError
+	; read it
+	mov	#C_PPU_READWD, PpuComm
+	call	WaitPpu
+	mov	#MsgReaErr, R0
+	call	ChkWdError
+	; compare
+	mov	#WdBufferR, R0
+	mov	#WdBufferW, R1
+	mov	#256., R3
+50$:	cmp	(R0)+, (R1)+
+	beq	60$
+	.print	#MsgCompErr
+	jmp	Exit
+60$:	sob	R3, 50$
+	return
+
+
+; prints message about what LBA we are writing
+PrintMsgWrite:
 	.print	#MsgWdWrite
 	mov	LbaHigh, R0
 	call	PriDec
@@ -172,38 +250,9 @@ WdInit:	; read FD sector
 	call	PriChr
 	mov	LbaLow, R0
 	call	PriDec
-	; write it
-	mov	#C_PPU_WRITEWD, PpuComm
-	call	WaitPpu
-	mov	#MsgWriErr, R0
-	call	ChkWdError
-	; read from WD to compare
-	mov	#C_PPU_READWD, PpuComm
-	call	WaitPpu
-	mov	#MsgReaErr, R0
-	call	ChkWdError
-	mov	#WdBufferR, R0
-	mov	#WdBufferW, R1
-	mov	#256., R3
-50$:	cmp	(R0)+, (R1)+
-	beq	60$
-	.print	#MsgCompErr
-	br	Exit
-60$:	sob	R3, 50$
-	; ok then
 	mov	#15, R0
 	call	PriChr
-	; increase FD sector
-	inc	FdSector
-	cmp	FdSector, #11.
-	blo	WdInit
-	mov	#1, FdSector
-	inc	FdTrack
-	br	WdInit
-
-Done:	.print	#MsgCrl
-Exit:	.print	#MsgExit
-	halt
+	return
 
 
 ; check for WD error
@@ -294,6 +343,7 @@ WdError:	.word	0			; WD error
 MaxCyl:		.word	0
 MaxHea:		.word	0
 MaxSec:		.word	0
+PartNum:	.word	0			; number of partitions to init
 BufExch:	.blkw	10			; some space to use by FD reading routines in PPU ROM
 
 MsgNum:		.asciz	"000000"
@@ -307,13 +357,13 @@ MsgI02:		.asciz	"  Sectors: "
 MsgI03:		.asciz	"   Serial: "
 MsgI04:		.asciz	" Firmware: "
 MsgI05:		.asciz	"    Model: "
-MsgBadWd:	.asciz	"(!) heads<>16, sectors<>63 - are not supported"<12><15>
-MsgConfirm:	.asciz	"Press any key to initialize (STOP or reset otherwise)"
+MsgConfirm:	.asciz	"Number of partitions (1-8, STOP): "
 MsgFdError:	.asciz	<12><15>"(!) FD read error: "
 MsgWdWrite:	.asciz	"WD write (LBAlow LBAhigh): "
 MsgWriErr:	.asciz	<12><15>"(!) WD write error: "
 MsgReaErr:	.asciz	<12><15>"(!) WD read error: "
 MsgCompErr:	.asciz	<12><15>"(!) WD read and compare error"<12><15>
+MsgComplete:	.asciz	<12><15>"First partition write complete"
 		.even
 
 WdData:

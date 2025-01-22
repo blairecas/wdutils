@@ -5,8 +5,8 @@ read and write MS0511 HDD data over RS-232
 (!) images data is NOT inverted for this program (!) do not use it at all, it's for my own purposes
 
 wdinit.dsk
-floppy disk image to help init HDD
-will write minimal RT-11 partition
+floppy disk image to help init WD HDD
+will write block 0 and minimal RT-11 partition on WD0
 
 ide_wdromv0110.bin
 ide_wdromv0200.bin

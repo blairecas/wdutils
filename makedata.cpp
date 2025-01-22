@@ -1,16 +1,17 @@
 #include <windows.h>
 #include <stdio.h>
 
-    unsigned int lba = 0;
+    unsigned int lba = 1;
     unsigned short secbuf[256];
     unsigned int datacnt = 0;
 
 void main ()
 {
     FILE *f = fopen("default.img", "rb");
+    fseek(f, 512, SEEK_SET);
     FILE *g = fopen("wdinit_data.bin", "wb");
-    FILE *h = fopen("wdinit_data.mac", "w");
-    while ((!feof(f)) & (lba < 1000000))
+    FILE *h = fopen("wdinit_data.mac", "w");    
+    while ((!feof(f)) & (lba <= 65535))
     {
         // read and invert data
         int l = fread(secbuf, 2, 256, f);

@@ -1,4 +1,3 @@
-	.word	0., 0.
 	.word	1., 0.
 	.word	2., 0.
 	.word	3., 0.
@@ -6,6 +5,23 @@
 	.word	5., 0.
 	.word	6., 0.
 	.word	7., 0.
+	.word	69., 0.
+	.word	70., 0.
+	.word	71., 0.
+	.word	72., 0.
+	.word	73., 0.
+	.word	74., 0.
+	.word	75., 0.
+	.word	76., 0.
+	.word	77., 0.
+	.word	78., 0.
+	.word	79., 0.
+	.word	80., 0.
+	.word	81., 0.
+	.word	82., 0.
+	.word	83., 0.
+	.word	84., 0.
+	.word	85., 0.
 	.word	96., 0.
 	.word	97., 0.
 	.word	98., 0.
@@ -123,7 +139,7 @@
 	.word	213., 0.
 	.word	214., 0.
 	.word	215., 0.
-	.word	216., 0.
+	.word	219., 0.
 	.word	220., 0.
 	.word	221., 0.
 	.word	222., 0.
@@ -500,24 +516,5 @@
 	.word	593., 0.
 	.word	594., 0.
 	.word	595., 0.
-	.word	0., 1.
-	.word	1., 1.
-	.word	6., 1.
-	.word	65535., 1.
-	.word	0., 2.
-	.word	5., 2.
-	.word	65534., 2.
-	.word	65535., 2.
-	.word	4., 3.
-	.word	65533., 3.
-	.word	65534., 3.
-	.word	3., 4.
-	.word	65532., 4.
-	.word	65533., 4.
-	.word	2., 5.
-	.word	65531., 5.
-	.word	65532., 5.
-	.word	1., 6.
-	.word	65530., 6.
-	.word	65531., 6.
-	.word	0., 7.
+	.word	596., 0.
+	.word	597., 0.
