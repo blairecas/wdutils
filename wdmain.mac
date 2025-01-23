@@ -45,8 +45,16 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 	beq	10$				; no error
 	mov	MsgErrTable(R0), R0
 	jmp	Error
-10$:	; we are ok for now
-	; compute and set partition sizes
+10$:	; we are ok for now, check atmega version
+	mov	AtmVer, R0
+	call	Chk19
+	bcs	12$
+	movb	R0, MsgAtmVer+2
+	swab	R0
+	call	Chk19
+	bcs	12$
+	movb	R0, MsgAtmVer
+12$:	; compute and set partition sizes
 	mov	#End+2, R5
 	mov	#WdrPartTable+4, R0		; partitions table addr (+1 element)
 	mov	#1, R1				; partitions low addr
@@ -326,18 +334,25 @@ PriStr:	mov	R1, -(SP)
 99$:	mov	(SP)+, R1
 	return
 
-; print decimal, R0 - number
-PriDec:	mov	R1, -(SP)
-	mov	R2, -(SP)
-	mov	R3, -(SP)
-	mov	#MsgNum5+5, R2
-	mov	#5., R3
+; put decimal to ascii
+; R0 - number
+; R2 - end addr of where to put (last byte + 1)
+; returns R2 - addr of string 00000
+PutDec:	mov	#5., R3
 10$:	mov	R0, R1
 	clr	R0
 	div	#10., R0			; R0:R1 / 10. -> R0 - quotient, R1 - reminder
 	add	#'0, R1
 	movb	R1, -(R2)
 	sob	R3, 10$
+	return
+
+; print decimal, R0 - number
+PriDec:	mov	R1, -(SP)
+	mov	R2, -(SP)
+	mov	R3, -(SP)
+	mov	#MsgNum5+5, R2
+	call	PutDec
 	mov	R2, R0
 	mov	(SP)+, R3
 	mov	(SP)+, R2
@@ -381,6 +396,14 @@ ClearLine:
 	mov	#13, R0
 	br	PriChr
 
+; check low byte of R0 for being in range '1'..'9'
+Chk19:	cmpb	R0, #'1
+	blo	90$
+	cmpb	R0, #'9
+	bhi	90$
+	tst	(PC)+
+90$:	sec
+	return
 
 
 ; new device ports
@@ -396,6 +419,7 @@ NewDevices:	.word	C_AY_PORT1,   0, MsgAy
 		.word	C_MOUSE_PORT, 0, MsgMouse
 		.word	C_RTC_PORT,   0, MsgRtc
 
+AtmVer:		.word	0		; atmega firmware version (if any)
 CurPart:	.word	0		; selected partition
 MaxPart:	.word	177777		; maximal # of partitions
 
@@ -443,7 +467,8 @@ MsgNoPart:	.asciz	<12><15><33><240>"2(!) first partition have size 0"<12><15>
 		.byte	0
 
 MsgCrc:		.ascii	<33><240>"6(?) block 0 have wrong CRC (?)"
-MsgOk:		.asciz	<33><240>"4"<220><33><240>"7 WDBOOT"<33><240>"4 v2.0"<12><15><12><15>
+MsgOk:		.ascii	<33><240>"4"<220><33><240>"7 WDBOOT"<33><240>"4 v2.0 "<33><240>"1"
+MsgAtmVer:	.asciz	"0.0"<33><240>"4"<12><15><12><15>
 MsgNocart:	.asciz	"(!) unable to access WD cartridge"
 MsgNoslot:	.asciz	"(!) unable to allocate PPU resident slot"
 MsgBusy:	.asciz	"(!) WD always busy (BSY=1)"
@@ -593,6 +618,22 @@ PpuDoOther:
 	inc	(R4)
 	inc	(R4)
 	sob	R3, 10$
+	; get sketch version for atmega (if any)	
+	clr	R0
+	mov	#177400, R2
+	mov	#20, R1				; read port 20(8) times
+	mov	(R2), R3			; to flush any mouse coords
+	sob	R1, .-2				; on old kakave
+	mov	(R2), R3 			; - must (or can) be 0
+	mov	#7, (R2)			; - get version command
+	mov	(R2), R1			; - can be [VER_L VER_H] in ascii
+	tst	R0				; had trap4?
+	bne	20$				; yes - skip version
+	cmp	R1, R3				; no changes after write? (old kakave?)
+	beq	20$				; yes - skip version
+	mov	#AtmVer/2, (R4)
+	mov	R1, (R5)
+20$:	; ..its hard to get version..
 ; play note 2 on midi output
 MidiNote2:
 	mov	#C_MIDI_PORT+2, R0

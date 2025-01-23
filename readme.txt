@@ -1,24 +1,27 @@
 Some utilities and ROM code for working with HDD on MS-0511
-
-hdsend.exe, hdsend.bin
-read and write MS0511 HDD data over RS-232
-(!) images data is NOT inverted for this program (!) do not use it at all, it's for my own purposes
+(!) do not use them except wdinit.dsk (!)
 
 wdinit.dsk
 floppy disk image to help init WD HDD
 will write block 0 and minimal RT-11 partition on WD0
+
+wdr2.sav
+replacement resident for wdr.sav from Oleg H.
+slower, bigger (and uncut :) etc..
+changed to lba28 and added 'flush cache'
 
 ide_wdromv0110.bin
 ide_wdromv0200.bin
 original and my ROM cartridge images
 
 m324pa.raw
-flash data (with ide_wdromv0200.bin) for atmega on KAKAVE board
+flash data (ver 3.6 with ide_wdromv0200.bin) for atmega on KAKAVE board
+it's for 14.7456MHz oscillator version, 324pa chip
 
-wdr2.sav
-replacement resident for wdr.sav from Oleg H.
-slower, bigger (and uncut :) etc..
-changed to lba28 and added 'flush cache'
+hdsend.exe, hdsend.bin
+read and write MS0511 HDD data over RS-232
+(!) images data is NOT inverted for this program
+
 
 -----------------------------------
 HDD WD image format used in MS-0511
