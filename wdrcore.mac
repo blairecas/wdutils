@@ -145,8 +145,8 @@ WdrWaitData:
 	mov	#C_WDR_ERR, WdrError		; generic error
 	tst	(SP)+				; skip one call
 	return
-10$:	; check DRDY + DRQ	
-	bic	#^B1111111111011011, R0		; checking >>1 bits because of asr
+10$:	; check DRQ	
+	bic	#^B1111111111111011, R0		; checking >>1 bits because of asr
 	bne	WdrWaitData
 	return
 
@@ -161,6 +161,7 @@ WdrPreReg:
 	swab	R0
 	com	R0				; sectors count inverted
 	; ide regs
+	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA28
 	mov	#110014, R1			; 110014 error code
 	mov	R0, -(R1)			; 110012 sectors count
 	mov	WdrLbaLow, R0
@@ -171,7 +172,8 @@ WdrPreReg:
 	mov	WdrLbaHigh, R0
 	com	R0
 	mov	R0, -(R1)			; 110004 high 8 bits of LBA
-	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA28
+	dec	R1
+	dec	R1
 	; other regs
 	mov	R2, (R4)
 	mov	#110016, R2

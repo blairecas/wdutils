@@ -571,12 +571,14 @@ PpuRead0:
 	mov	#C_WDR_NORDY, PpuError
 	jmp	PpuExit
 30$:	; set HDD read block 0 command
+	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA28
 	mov	#110014, R1			; 110014 error code
 	mov	#^C1, -(R1)			; 110012 sectors count
 	mov	#^C0, -(R1)			; 110010 LBA low
 	mov	#^C0, -(R1)			; 110006 LBA med
 	mov	#^C0, -(R1)			; 110004 LBA high
-	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA28
+	dec	R1
+	dec	R1
 	mov	#^C40, -(R1)			; 110000 0x20 read sectors
 	; wait BSY=0
 	clr	R3
@@ -590,10 +592,10 @@ PpuRead0:
 	beq	60$				; no error or drive fault
 	mov	#C_WDR_ERR, PpuError		; generic error
 	jmp	PpuExit
-60$:	; wait DRDY and DRQ
+60$:	; wait DRQ
 	clr	R0
-70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
-	beq	80$				; both set (inverted)
+70$:	bit	#^B00001000, (R1)		; test DRQ
+	beq	80$				; it's set (inverted)
 	sob	R0, 70$
 	mov	#C_WDR_NODRQ, PpuError
 	jmp	PpuExit
