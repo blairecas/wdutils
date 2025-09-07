@@ -549,7 +549,7 @@ MidiNote1:
 PpuRead0:
 	; check cartridge presence (and for what? we are booting from cartridge)
 	clr	R0
-	mov	#^C4, (R1)			; 0x04
+	mov	#^C10, (R1)			; 0x08 - ATAPI RESET
 	tst	R0
 	beq	10$
 	; ERROR no cartridge
@@ -560,7 +560,7 @@ PpuRead0:
 	com	R0
 	bit	#^B10001000, R0			; test BSY and DRQ
 	beq	30$				; they are clear
-	mov	#^C4, (R1)			; 0x04
+	mov	#^C10, (R1)			; 0x08 - ATAPI RESET
 	clr	R3
 20$:	mov	(R1), R0
 	bic	#^B1111111100111111, R0	
