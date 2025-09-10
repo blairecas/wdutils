@@ -253,8 +253,8 @@ WdrOperation:
 150$:	clr	(R2)
 	incb	R0
 	bne	150$
-199$:	; flush cache (some ATA drives WILL need it)
+199$:	; flush cache (some drives WILL need it)
 	call	WdrWaitComm
-	mov	#^C<^xE7>, (R4)
+	mov	#^C<^xE7>, (R1)
 	return
 
