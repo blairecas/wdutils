@@ -1,0 +1,502 @@
+	.title	WDDBG
+	.enabl	LC
+
+	.asect
+	.=1000
+
+C_VADDR		=: 100000
+C_SCRWID	=: 80.
+C_FONT_DY	=: 11.
+C_FONT_ADDR	=: 117430
+
+Start:	call	RunPpu
+	tst	PPcomm
+	bne	.-4
+	call	PPRele
+	emt	350
+
+
+; channel 2 data
+PPcomm:	.word	177777
+PPmsg:	.word	PPArr
+        .word	177777
+PPArr:	.byte	0				; 23334 return value (0 - OK)
+PPCmd:	.byte	1				; 23335 command (1 - allocate)
+PPDev:	.word	32				; 23336 device type (0x-FD, 32-ppu mem)
+PPApp:	.word	0				; 23340 argument(s) (PPU addr for mem operations)
+PPAcp:	.word	End-PpuStart/2			; 23342 CPU addr (length in words for mem allocate)
+PPLen:	.word	End-PpuStart/2			; 23344 length in words
+
+; send to PPU by channel 2
+PPSen:	mov	#PPMsg, R2
+	mov	#5, R3
+	br	20$
+10$:	movb	(R2)+, @#176676
+20$:	tstb	@#176674
+	bpl	20$
+	sob	R3, 10$
+	return
+
+; run code, wait for execution
+RunPpu:	call	PPSen				; allocate (!) no testing for success
+	movb	#20, PPCmd			; copy mem CPU -> PPU
+	mov	#PpuStart, PPAcp		; adjust start addr (there was mem size for allocate)
+	call	PPSen				;
+	movb	#30, PPCmd			; run
+	br	PPSen				;
+
+; release PPU mem
+PPRele:	movb	#2, PPCmd
+	br	PPSen
+
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU
+; //////////////////////////////////////////////////////////////////////////////
+
+	.macro	.print	X
+	mov	PC, R0
+	add	X-., R0
+	call	PrintStr
+	.endm
+
+	.macro	.write	X, ADDR
+	mov	X, R0
+	mov	ADDR, R1
+	call	WriteWord
+	.endm
+
+	.macro	.read	ADDR
+	mov	ADDR, R1
+	call	ReadWord
+	.endm
+
+
+PpuStart:
+	mtps	#200
+
+	; stop FD (? do we need that ?)
+	clr	R0
+	call	@7132(R0)
+	; backup some values
+	mov	@#4, Bkp004			; save int 4 vec
+	mov	@#6, Bkp006
+	mov	@#272, Bkp272			; save vlines table addr
+	mov	@#300, Bkp300			; save keyboard int vec
+	mov	@#177054, Bkp054		; save mem map
+	; setup our int 4
+	mov	PC, R0
+	add	#Int4-., R0
+	mov	R0, @#4
+	mov	#200, @#6
+	; keyboard int
+	mov	PC, R0
+	add	#KeyInt-., R0
+	mov	R0, @#300
+	; setup screen
+	call	ClearScreen
+	call	SetVLines
+	mov	R0, @#272
+	mov	#C_VADDR, @#177010
+
+	; all are set
+	mtps	#0
+
+	; check cartridges
+	mov	#7, PrintColor
+	.print	#MsgChkCart1
+	mov	#^B00000010, WdCart		; bank #1, cassette #1
+	call	CheckCart
+	beq	10$				; can write to IDE reg
+	mov	#7, PrintColor
+	.print	#MsgChkCart2
+	mov	#^B00001010, WdCart		; bank #1, cassette #2
+	call	CheckCart
+	beq	10$
+	mov	#2, PrintColor
+	.print	#MsgNoCart
+	jmp	PpuExit
+
+10$:	; some info
+	mov	#7, PrintColor
+	.print	#MsgInfo
+	call	WaitReady
+	.write	#^C340, #110002
+	call	WaitReady
+
+	; read block 0
+	.write	#^C340, #110002			; 110002 0xE0 set master, LBA28
+	.write	#^C1, #110012			; 110012 sectors count
+	.write	#^C0, #110010			; 110010 LBA low
+	.write	#^C0, #110006			; 110006 LBA med
+	.write	#^C0, #110004			; 110004 LBA high
+	.write	#^C40, #110000			; 110000 0x20 read sectors
+	call	WaitDrq
+	.print	#MsgCrLf
+	mov	#7, PrintColor
+	.print	#MsgReadSect
+	; reading first 50. words of block
+	mov	#5, PrintColor
+	mov	#5., R5
+20$:	mov	#10., R4
+30$:	mov	@#110016, R0
+	call	PrintOctal
+	.print	#MsgSpace
+	sob	R4, 30$
+	.print	#MsgCrLf
+	sob	R5, 20$
+	; reading rest of block
+	mov	#400-50., R5
+40$:	tst	@#110016
+	sob	R5, 40$
+	
+	jmp	PpuExit
+
+
+; wait for BSY=0, RDY=1
+WaitReady:
+	mov	#3, R5
+40$:	.read	#110000
+	bic	#^B1111111100111111, R0	
+	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
+	beq	50$
+	clr	R0
+	sob	R0, .
+	sob	R5, 40$
+	mov	#2, PrintColor
+	.print	#MsgNoRdy
+	tst	(SP)+
+	jmp	PpuExit
+50$:	return
+
+
+; wait for DRQ=1, ERR=0
+WaitDrq:
+	mov	#3, R5
+40$:	.read	#110000
+	bic	#^B1111111111110110, R0	
+	cmp	#^B0000000000000001, R0		; need DRQ=1, ERR=0 (we are inverted)
+	beq	50$
+	clr	R0
+	sob	R0, .
+	sob	R5, 40$
+	mov	#2, PrintColor
+	.print	#MsgNoDrq
+	tst	(SP)+
+	jmp	PpuExit
+50$:	return
+
+
+; check cartridge presence, return in flag Z=1 - have it
+CheckCart:
+	.write	WdCart, #177054
+	tst	WasInt4
+	return
+
+
+; exit to .. somewhere
+PpuExit:
+	mov	#7, PrintColor
+	.print	#MsgCrLf
+	.print	#MsgPressKey
+	clr	KeyCur
+	tst	KeyCur
+	beq	.-4
+	; restore backed
+	mtps	#200
+	mov	Bkp054, @#177054
+	mov	Bkp300, @#300
+	mov	Bkp272, @#272
+	mov	Bkp006, @#6
+	mov	Bkp004, @#4
+	mov	#PPcomm/2, @#177010
+	clr	@#177014
+	mtps	#0
+	return
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Utils
+; //////////////////////////////////////////////////////////////////////////////
+
+; custom int 4
+Int4:	inc	(PC)+
+WasInt4:	.word	0
+	rti
+
+
+; keyboard int
+KeyInt:	mov	R0, -(SP)
+	movb	@#177702, R0			; scancode (read it just once)
+	bmi	99$				; key released
+	; key pressed
+	mov	R0, KeyCur
+99$:	mov	(SP)+, R0
+	rti
+
+
+; write R0 to (R1) with debug on screen
+WriteWord:
+	mov	#6, PrintColor
+	mov	R0, -(SP)
+	mov	R1, R0
+	call	PrintOctal
+	.print	#MsgArrow1
+	mov	(SP), R0
+	call	PrintOctal
+	.print	#MsgCom
+	mov	(SP), R0
+	com	R0
+	call	PrintOctal
+	.print	#MsgSpaces
+	mov	(SP)+, R0
+	clr	WasInt4
+	mov	R0, (R1)
+	tst	WasInt4
+	beq	90$
+	mov	#2, PrintColor
+	.print	#MsgWasInt4
+90$:	.print	#MsgCrLf
+	return
+	
+
+; read (R1) -> R0 with debug info
+ReadWord:
+	mov	#4, PrintColor
+	mov	R1, R0
+	call	PrintOctal
+	.print	#MsgArrow2
+	clr	WasInt4
+	mov	(R1), R0
+	mov	R0, -(SP)
+	call	PrintOctal
+	.print	#MsgCom
+	mov	(SP), R0
+	com	R0
+	call	PrintOctal
+	.print	#MsgCom
+	mov	(SP), R0
+	com	R0
+	call	PrintBinary
+	tst	WasInt4
+	beq	90$
+	mov	#2, PrintColor
+	.print	#MsgWasInt4
+90$:	.print	#MsgCrLf
+	mov	(SP)+, R0
+	return
+
+
+; setup lines table, return new lines table -> R0
+SetVlines:
+	mov	PC, R0
+	add	#VLines+7-., R0
+	bic	#7, R0				; R0 - line table start addr
+	mov	R0, -(SP)			; save it
+	bis	#6, (SP)			; +6 means first line descriptor have color
+	mov	#^B1011101010011000, (R0)+ 	; YRGB YRGB YRGB YRGB for colors 1st part
+	mov	#^B1111111011011100, (R0)+	; YRGB YRGB YRGB YRGB for colors 2nd part
+	clr	(R0)+				; vaddr not used for first 18 lines
+	mov	R0, (R0)
+	add	#2, (R0)
+	bis	#2, (R0)+			; +2 means next line is scale&cursor
+	mov	#^B0000000000010000, (R0)+	; black colored graph cursor
+	mov	#^B0000000000000111, (R0)+	; max luminance (xxxDDxBGR, DD: 00-640, 01-320, 10-160, 11-80)
+	clr	(R0)+				; vaddr still not needed
+	mov	R0, (R0)
+	add	#2, (R0)+			; +0 means next line is 2-word descriptor
+	; 16. not used lines
+	mov	#16., R3
+10$:	clr	(R0)+
+	mov	R0, (R0)
+	add	#2, (R0)+
+	sob	R3, 10$
+	; 288. main lines (18. * 8.)
+	mov	#C_VADDR, R1
+	mov	#288., R3
+	mov	R0, (PC)+			; save addr
+28$:	.word	000000
+30$:	mov	R1, (R0)+			; put vaddr
+	mov	R0, (R0)			; put next element addr
+	add	#2, (R0)+
+	add	#C_SCRWID, R1			; advance vaddr
+	sob	R3, 30$
+	; cycle last line -> first line
+	tst	-(R0)
+	mov	28$, (R0)
+	add	#2, (R0)
+	mov	(SP)+, R0			; R0 <- new lines table addr
+	return
+
+
+; clear video mem
+ClearScreen:
+	mov	#177010, R4
+	mov	#177014, R5
+	mov	#177012, R2
+	mov	#C_VADDR, (R4)
+	mov	#288.*C_SCRWID, R3
+10$:	clr	(R5)
+	clr	(R2)
+	inc	(R4)
+	sob	R3, 10$
+	return
+
+
+; push all registers
+PushRegs:
+	mov	R0, TmpR0
+	mov	R1, TmpR1
+	mov	R2, TmpR2
+	mov	R3, TmpR3
+	mov	R4, TmpR4
+	mov	R5, TmpR5
+	return
+
+
+; pop all registers
+PopRegs:
+	mov	TmpR5, R5
+	mov	TmpR4, R4
+	mov	TmpR3, R3
+	mov	TmpR2, R2
+	mov	TmpR1, R1
+	mov	TmpR0, R0
+	return
+
+
+; 117430 - addr of 0x00 character in ROM, font is 11. bytes per character, KOI8R
+; R0 - string addr
+PrintStr:
+	call	PushRegs
+	mov	PrintColor, @#177016			; set 'ink' color
+	mov	#177010, R4
+	mov	#177024, R5
+	mov	#C_SCRWID, R2
+10$:	clr	R1
+	bisb	(R0)+, R1
+	beq	90$
+	; LF ?
+	cmp	R1, #12
+	bne	20$
+	inc	PrintY
+	add	#C_FONT_DY*C_SCRWID, (R4)
+	cmp	(R4), #286.*C_SCRWID+C_VADDR
+	blo	10$
+	sub	#286.*C_SCRWID, (R4)
+	br	10$
+20$:	; CR ?
+	cmp	R1, #15
+	bne	30$
+	mov	(R4), R3
+	sub	#C_VADDR, R3
+	clr	R2
+	div	#C_SCRWID, R2
+	sub	R3, (R4)
+	mov	#C_SCRWID, R2
+	br	10$
+30$:	mul	#C_FONT_DY, R1
+	add	#C_FONT_ADDR, R1
+	.rept	C_FONT_DY
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	.endr
+	sub	#C_FONT_DY*C_SCRWID-1, (R4)
+	br	10$
+90$:	jmp	PopRegs
+
+
+; R0 - number
+PrintOctal:
+	call	PushRegs
+	mov	PrintColor, @#177016			; set 'ink' color
+	mov	#177010, R4
+	mov	#177024, R5
+	mov	#C_SCRWID, R2
+	mov	#6., R3
+	clr	R1
+	br	22$
+20$:	clr	R1
+	asl	R0
+	rol	R1
+	asl	R0
+	rol	R1
+22$:	asl	R0
+	rol	R1	
+	mul	#C_FONT_DY, R1
+	add	#'0*C_FONT_DY+C_FONT_ADDR, R1
+	.rept	C_FONT_DY
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	.endr
+	sub	#C_FONT_DY*C_SCRWID-1, (R4)
+	sob	R3, 20$
+	jmp	PopRegs
+
+
+; R0 - number
+PrintBinary:
+	call	PushRegs
+	mov	PrintColor, @#177016			; set 'ink' color
+	mov	#177010, R4
+	mov	#177024, R5
+	mov	#C_SCRWID, R2
+	mov	#16., R3
+20$:	mov	#'0*C_FONT_DY+C_FONT_ADDR, R1
+	rol	R0
+	bcc	30$
+	mov	#'1*C_FONT_DY+C_FONT_ADDR, R1
+30$:	.rept	C_FONT_DY
+	movb	(R1)+, (R5)
+	add	R2, (R4)
+	.endr
+	sub	#C_FONT_DY*C_SCRWID-1, (R4)
+	sob	R3, 20$
+	jmp	PopRegs
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Data
+; //////////////////////////////////////////////////////////////////////////////
+
+PrintColor:	.word	7				; current color for print
+PrintY:		.word	0				; current cursor Y pos
+
+MsgCrLf:	.asciz	<12><15>
+MsgChkCart1:	.asciz	"Checking cartridge slot #1"<12><15>
+MsgChkCart2:	.asciz	"Checking cartridge slot #2"<12><15>
+MsgNoCart:	.asciz	"(!) Can't find cartridge"<12><15>
+MsgArrow1:	.asciz	" <- "
+MsgArrow2:	.asciz	" -> "
+MsgCom:		.asciz	" ^C"
+MsgSpace:	.asciz	" "
+MsgSpaces:	.asciz	"  "
+MsgWasInt4:	.asciz	"(!) INT4"
+MsgPressKey:	.asciz	"Press any key to exit..."
+MsgBusy:	.asciz	"(!) Can't get BSY=0, DRQ=0"<12><15>
+MsgNoRdy:	.asciz	"(!) Can't get BSY=0, RDY=1"<12><15>
+MsgNoDrq:	.asciz	"(!) Can't get DRQ=1, ERR=0"<12><15>
+MsgInfo:	.asciz	"                                    BRF Q  E"<12><15>
+MsgReadSect:	.asciz	"Reading first words of block 0"<12><15>
+		.even
+
+Bkp004:		.word	0			; memory backup values
+Bkp006:		.word	0
+Bkp272:		.word	0
+Bkp300:		.word	0
+Bkp054:		.word	0
+
+TmpR0:		.word	0
+TmpR1:		.word	0
+TmpR2:		.word	0
+TmpR3:		.word	0
+TmpR4:		.word	0
+TmpR5:		.word	0
+
+WdCart:		.word	0			; current value to 177054
+KeyCur:		.word	0			; pressed key
+
+VLines:		.blkw	288.+16.*2+8.+4.+16.	; 304 x 2-words + 2 x 4-words + 4 x 1-word (for align) + 16. words for something
+
+End:
+
+	.end	Start
