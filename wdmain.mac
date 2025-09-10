@@ -538,18 +538,18 @@ PpuCart =: .+2
 	mov	#177014, R5
 ; play note 1 on midi output (will trap 4 if absent, but its ok)
 MidiNote1:
-	mov	#C_MIDI_PORT, R0
-	mov	#77, (R0)+			; command: allow midi data in +2 reg
-	mov	#^xC0, (R0)			; select program on channel #0
-	mov	#^x09, (R0)			; glockenspiel
-	mov	#^x90, (R0)			; press note on channel #0
-	mov	#^x38, (R0)			; ..some note..
-	mov	#^x7F, (R0)			; max velocity
+	mov	#C_MIDI_PORT, R3
+	mov	#77, (R3)+			; command: allow midi data in +2 reg
+	mov	#^xC0, (R3)			; select program on channel #0
+	mov	#^x09, (R3)			; glockenspiel
+	mov	#^x90, (R3)			; press note on channel #0
+	mov	#^x38, (R3)			; ..some note..
+	mov	#^x7F, (R3)			; max velocity
 ; read absolute block 0 from HDD
 PpuRead0:
 	; check cartridge presence (and for what? we are booting from cartridge)
 	clr	R0
-	mov	#^C10, (R1)			; 0x08 - ATAPI RESET
+	mov	#^C340, @#110002		; 0xE0 set master, LBA28
 	tst	R0
 	beq	10$
 	; ERROR no cartridge
@@ -560,7 +560,7 @@ PpuRead0:
 	com	R0
 	bit	#^B10001000, R0			; test BSY and DRQ
 	beq	30$				; they are clear
-	mov	#^C10, (R1)			; 0x08 - ATAPI RESET
+	mov	#^C340, @#110002		; 0xE0 set master, LBA28
 	clr	R3
 20$:	mov	(R1), R0
 	bic	#^B1111111100111111, R0	
@@ -638,12 +638,12 @@ PpuDoOther:
 20$:	; ..its hard to get version..
 ; play note 2 on midi output
 MidiNote2:
-	mov	#C_MIDI_PORT+2, R0
-	mov	#^xC1, (R0)
-	mov	#^x09, (R0)
-	mov	#^x91, (R0)
-	mov	#^x3D, (R0)
-	mov	#^x7F, (R0)
+	mov	#C_MIDI_PORT+2, R3
+	mov	#^xC1, (R3)
+	mov	#^x09, (R3)
+	mov	#^x91, (R3)
+	mov	#^x3D, (R3)
+	mov	#^x7F, (R3)
 ; restore saved and exit
 PpuExit:
 	mov	(SP)+, @#177054

@@ -125,7 +125,7 @@ WdrWaitComm:
 	bit	#^B10001000, R0			; test BSY and DRQ
 	beq	99$				; they are clear
 	; trying to reset then
-	mov	#^C10, @#110000			; 0x08 - ATAPI RESET
+	mov	#^C340, @#110002		; 0xE0 again set master and LBA28
 10$:	mov	@#110000, R0
 	bic	#^B1111111100111111, R0	
 	cmp	#^B0000000010000000, R0		; need BSY=0, DRDY=1
