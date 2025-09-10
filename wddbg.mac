@@ -188,7 +188,9 @@ WaitDrq:
 
 ; check cartridge presence, return in flag Z=1 - have it
 CheckCart:
+	clr	WasInt4
 	.write	WdCart, #177054
+	mov	#^C340, @#110002
 	tst	WasInt4
 	return
 
