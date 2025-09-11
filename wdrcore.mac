@@ -25,18 +25,22 @@ WdrMain:
 	; check command
 	mov	#C_WDR_INT+2/2, (R4)		; PSW addr of WD.SYS interrupt vector
 	cmp	#342, (R5)			; used as 'command read/write' to resident
-	bne	WdrEx1
+	bne	WdrEx1				; no command issued
 	; have something
 	mov	@#177054, -(SP)			; save mappings
-WdrCart		=: .+2
+WdrCart	=: .+2
 	movb	#^B00000010, @#177054		; default is cassette #1, bank #1
-WdrError	=: .+2
+	; before anything check for BSY=0
+	tstb	@#110000
+	bpl	WdrExB				; BSY=1 - we are busy, do nothing (wait)
+	; ok - now we need to do something
+WdrError =: .+2
 	clr	#000000				; WDR error word
-WdrLbaHigh	=: .+2
+WdrLbaHigh =: .+2
 	clr	#000000				; WDR LBA high 8 bits (not used highest 4 bits)
-WdrLbaLow 	=: .+2
+WdrLbaLow =: .+2
 	clr	#000000				; WDR LBA low 16 bits
-WdrOperType	=: .+2
+WdrOperType =: .+2
 	clr	#000000				; operation type (0 - read, <>0 - write)
 	mov	#1, R0				; max size for special operation with block 0
 	; get params, Oleg H. code
@@ -101,14 +105,16 @@ WdrEx0:	; set error result
 	; execute int 24 in CPU with addr of WD.SYS int
 	dec	(R4)
 	mov	(R5), R0			; get WD.SYS int vector
-	beq	10$				; none of it - then nothing to do
+	beq	WdrExB				; none of it - then nothing to do
 	mov	#24/2, (R4)			; addr 24 in CPU (vector of power int)
 	mov	(R5), R1			; save original val
 	mov	R0, (R5)			; set new addr
 	bic	#100000, @#177716		; execute interrupt on 24 in CPU
 	bis	#100000, @#177716
 	mov	R1, (R5)			; restore CPU int 24
-10$:	mov	(SP)+, @#177054
+
+WdrExB:	; exit if BSY=1
+	mov	(SP)+, @#177054
 
 WdrEx1:	; (re)queue resident
 	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr to 'test subroutine'
@@ -118,22 +124,16 @@ WdrEx1:	; (re)queue resident
 	jmp	@#174170			; jump to process dispatcher
 
 
-; check ready to receive command
-WdrWaitComm:
-	mov	@#110000, R0
-	com	R0
-	bit	#^B10001000, R0			; test BSY and DRQ
-	beq	99$				; they are clear
-	; trying to reset then
-	mov	#^C340, @#110002		; 0xE0 again set master and LBA28
-10$:	mov	@#110000, R0
-	bic	#^B1111111100111111, R0	
-	cmp	#^B0000000010000000, R0		; need BSY=0, DRDY=1
-	bne	10$				; (we are inverted)
-99$:	return
+; wait ready to receive command, we need to wait for BSY=0, DRQ=0
+;WdrWaitComm:
+;	mov	@#110000, R0
+;	com	R0
+;	bit	#^B10001000, R0			; test BSY and DRQ (both must be 0)
+;	bne	WdrWaitComm			; they are NOT clear
+;	return
 
 
-; check ready to read / write
+; wait ready to read / write
 ; R1 must be #110000
 WdrWaitData:
 	; check BSY
@@ -145,23 +145,24 @@ WdrWaitData:
 	mov	#C_WDR_ERR, WdrError		; generic error
 	tst	(SP)+				; skip one call
 	return
-10$:	; check DRQ	
-	bic	#^B1111111111111011, R0		; checking >>1 bits because of asr
+10$:	; check DRDY + DRQ (both must be 1)
+	bic	#^B1111111111011011, R0		; checking >>1 bits because of asr
 	bne	WdrWaitData
 	return
 
 
-; prepare regs
+; read/write operation
 ; R2 - addr/2 in CPU
 ; R3 - size in words
-WdrPreReg:
+; WdrOperType - 0 (read), 1 (write)
+WdrOperation:
+	; call	WdrWaitComm
 	mov	R3, R0				; R3 must be size in words
 	add	#377, R0
 	clrb	R0
 	swab	R0
 	com	R0				; sectors count inverted
 	; ide regs
-	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA28
 	mov	#110014, R1			; 110014 error code
 	mov	R0, -(R1)			; 110012 sectors count
 	mov	WdrLbaLow, R0
@@ -172,24 +173,18 @@ WdrPreReg:
 	mov	WdrLbaHigh, R0
 	com	R0
 	mov	R0, -(R1)			; 110004 high 8 bits of LBA
-	dec	R1
-	dec	R1
+	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA
 	; other regs
-	mov	R2, (R4)
-	mov	#110016, R2
-	; R1 110002
+	mov	R2, (R4)			; addr/2 in CPU
+	mov	#110016, R2			; IDE data register addr
+	; R1 110000
 	; R2 110016
 	; R3 size in words
-	return
-
-
-; read/write operation
-WdrOperation:
-	call	WdrWaitComm
-	call	WdrPreReg
 	tst	WdrOperType
-	bne	100$
-	mov	#^C40, -(R1)			; 0x20 read
+	bne	WdrWri
+
+; read operation
+WdrRea:	mov	#^C40, -(R1)			; 0x20 read
 	; read full sectors	
 	swab	R3
 	tstb	R3
@@ -210,7 +205,7 @@ WdrOperation:
 30$:	; read last sector		
 	swab	R3
 	tstb	R3
-	beq	199$
+	beq	99$
 	call	WdrWaitData
 	mov	R3, R0
 40$:	mov	(R2), (R5)
@@ -220,9 +215,10 @@ WdrOperation:
 50$:	tst	(R2)
 	incb	R0
 	bne	50$
-	return
-	; -----------------
-100$:	mov	#^C60, -(R1)			; 0x30 write
+99$:	return
+
+; write operation
+WdrWri:	mov	#^C60, -(R1)			; 0x30 write
 	; write full sectors	
 	swab	R3
 	tstb	R3
@@ -254,7 +250,8 @@ WdrOperation:
 	incb	R0
 	bne	150$
 199$:	; flush cache (some drives WILL need it)
-	call	WdrWaitComm
-	mov	#^C<^xE7>, (R1)
+	tstb	(R1)				; wait for BSY to clear
+	bpl	.-2
+	mov	#^C<^xE7>, (R1)			; 0xE7 - flush cache
 	return
 

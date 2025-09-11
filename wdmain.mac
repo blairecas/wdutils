@@ -547,31 +547,26 @@ MidiNote1:
 	mov	#^x7F, (R3)			; max velocity
 ; read absolute block 0 from HDD
 PpuRead0:
-	; check cartridge presence (and for what? we are booting from cartridge)
+	; check HDD cartridge presence
 	clr	R0
-	mov	#^C340, @#110002		; 0xE0 set master, LBA28
-	tst	R0
-	beq	10$
+	mov	#^C340, @#110002		; 0xE0 set master, LBA
+	tst	R0				; was TRAP4?
+	beq	10$				; no
 	; ERROR no cartridge
 	mov	#C_WDR_NOCART, PpuError
 	jmp	PpuExit
 10$:	; waiting for HDD to be prepared receive command
-	mov	(R1), R0
+	clr	R3
+20$:	mov	(R1), R0			; read status
 	com	R0
 	bit	#^B10001000, R0			; test BSY and DRQ
 	beq	30$				; they are clear
-	mov	#^C340, @#110002		; 0xE0 set master, LBA28
-	clr	R3
-20$:	mov	(R1), R0
-	bic	#^B1111111100111111, R0	
-	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
-	beq	30$
 	sob	R3, 20$
-	; HDD controller not ready
+	; HDD controller not ready?
 	mov	#C_WDR_NORDY, PpuError
 	jmp	PpuExit
 30$:	; set HDD read block 0 command
-	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA28
+	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA (again!)
 	mov	#110014, R1			; 110014 error code
 	mov	#^C1, -(R1)			; 110012 sectors count
 	mov	#^C0, -(R1)			; 110010 LBA low
@@ -592,11 +587,11 @@ PpuRead0:
 	beq	60$				; no error or drive fault
 	mov	#C_WDR_ERR, PpuError		; generic error
 	jmp	PpuExit
-60$:	; wait DRQ
-	clr	R0
-70$:	bit	#^B00001000, (R1)		; test DRQ
+60$:	; wait DRDY + DRQ (both must be set)
+	clr	R3
+70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
 	beq	80$				; it's set (inverted)
-	sob	R0, 70$
+	sob	R3, 70$
 	mov	#C_WDR_NODRQ, PpuError
 	jmp	PpuExit
 80$:	; read one block
@@ -653,6 +648,7 @@ PpuError =: .+2
 	mov	#000000, (R5)
 	mtps	#0
 	return
+
 ; int 4 in PPU
 PpuIn4:	inc	R0
 	rti
