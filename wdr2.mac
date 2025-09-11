@@ -203,28 +203,19 @@ PpuBl0:	; read absolute block 0
 	mov	#110000, R1			; status reg
 	mov	#177010, R4
 	mov	#177014, R5
-	; prepare command
-	mov	(R1), R0
-	com	R0
-	bit	#^B10001000, R0			; test BSY and DRQ
-	beq	30$				; they are clear
-	mov	#^C4, (R1)			; 0x04
-	clr	R3
-20$:	mov	(R1), R0
-	bic	#^B1111111100111111, R0	
-	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
-	beq	30$
-	sob	R3, 20$
-	; HDD controller not ready
-	mov	#MsgNoRdy, R0
-	return
+	;
+	; TODO: check that drive is ready to receive command
+	; (and what to do if it's not?)
+	;
 30$:	; set HDD read block 0 command
+	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA
 	mov	#110014, R1			; 110014 error code
 	mov	#^C1, -(R1)			; 110012 sectors count
 	mov	#^C0, -(R1)			; 110010 LBA low
 	mov	#^C0, -(R1)			; 110006 LBA med
 	mov	#^C0, -(R1)			; 110004 LBA high
-	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA28
+	dec	R1
+	dec	R1
 	mov	#^C40, -(R1)			; 110000 0x20 read sectors
 	; wait BSY=0
 	clr	R3

@@ -555,17 +555,11 @@ PpuRead0:
 	; ERROR no cartridge
 	mov	#C_WDR_NOCART, PpuError
 	jmp	PpuExit
-10$:	; waiting for HDD to be prepared receive command
-	clr	R3
-20$:	mov	(R1), R0			; read status
-	com	R0
-	bit	#^B10001000, R0			; test BSY and DRQ
-	beq	30$				; they are clear
-	sob	R3, 20$
-	; HDD controller not ready?
-	mov	#C_WDR_NORDY, PpuError
-	jmp	PpuExit
-30$:	; set HDD read block 0 command
+10$:	;
+	; TODO: check drive is ready to receive command
+	; (and what to do if it's not?)
+	;
+	; set HDD read block 0 command
 	mov	#^C340, @#110002		; 110002 0xE0 set master, LBA (again!)
 	mov	#110014, R1			; 110014 error code
 	mov	#^C1, -(R1)			; 110012 sectors count
