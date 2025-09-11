@@ -485,10 +485,7 @@ PpuReadWd:
 	mov	#^C40, (R4)			; 110000 command 0x20 - read sectors
 	call	PpuWaitData
 	mov	#WdBufferR/2, @#177010		; addr in CPU where to read
-20$:
-;	bit	#^B00001000, (R4)		; test DRQ
-;	bne	.-4				; not ready
-	mov	(R5), @#177014			; get data (not inverting this time)
+20$:	mov	(R5), @#177014			; get data (not inverting this time)
 	inc	@#177010
 	sob	R3, 20$
 	jmp	PpuDone
@@ -503,10 +500,7 @@ PpuWriteWd:
 	mov	#^C60, (R4)			; 110000 command 0x30 - write sectors
 	call	PpuWaitData
 	mov	#WdBufferW/2, @#177010		; addr in CPU from where to write
-20$:
-;	bit	#^B00001000, (R4)		; test DRQ
-;	bne	.-4				; buffer not ready
-	mov	@#177014, (R5)			; put data
+20$:	mov	@#177014, (R5)			; put data
 	inc	@#177010
 	sob	R3, 20$
 	call	PpuWaitComm
@@ -538,29 +532,15 @@ PpuPrepare:
 
 ; check ready to receive command
 PpuWaitComm:
-	mov	@#110000, R0
-	com	R0
-	bit	#^B10001000, R0			; test BSY and DRQ
-	beq	20$				; they are clear
-	; trying to reset then
-	mov	#^C4, @#110000			; 0x04 reset
-	nop					; not needed
-10$:	mov	@#110000, R0
-	bic	#^B1111111100111111, R0	
-	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1
-	bne	10$				; (we are inverted)
-	return
-20$:	; wait DRDY
-	mov	@#110000, R0
-	bit	#^B01000000, R0
-	bne	20$
+	tstb	@#110000
+	bpl	PpuWaitComm			; BSY=1 (inverted) - wait then
 	return
 
 
 ; check ready to read / write
 PpuWaitData:
 	movb	@#110000, R0
-	bpl	PpuWaitData
+	bpl	PpuWaitData			; BSY=1 (inverted) - wait then
 	com	R0
 	bit	#^B00100001, R0			; test ERR and DF bits
 	beq	10$				; no error or drive fault
@@ -586,7 +566,7 @@ PpuChkCart:
 	mov	R0, @#4
 	clr	R0
 	mov	PpuWdCart, @#177054
-	mov	#^C1, @#110012
+	mov	#^C340, @#110002
 	mov	(SP)+, @#4
 	mtps	#0
 	tst	R0

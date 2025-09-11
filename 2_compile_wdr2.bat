@@ -13,6 +13,6 @@ if %ERRORLEVEL% NEQ 0 ( exit /b )
 
 rem remove not needed files
 del _wdr2.mac
-rem del _wdr2.lst
+del _wdr2.lst
 
 emulator\ukncbtl
