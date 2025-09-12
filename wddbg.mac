@@ -74,9 +74,6 @@ PPRele:	movb	#2, PPCmd
 PpuStart:
 	mtps	#200
 
-	; stop FD (? do we need that ?)
-	clr	R0
-	call	@7132(R0)
 	; backup some values
 	mov	@#4, Bkp004			; save int 4 vec
 	mov	@#6, Bkp006
@@ -257,7 +254,17 @@ WriteWord:
 	beq	90$
 	mov	#2, PrintColor
 	.print	#MsgWasInt4
-90$:	.print	#MsgCrLf
+90$:	; read from there then
+	mov	#1, PrintColor
+	.print	#MsgRead
+	mov	(R1), R0
+	mov	R0, -(SP)
+	call	PrintOctal
+	.print	#MsgCom
+	mov	(SP)+, R0
+	com	R0
+	call	PrintOctal
+	.print	#MsgCrLf
 	return
 	
 
@@ -472,13 +479,14 @@ MsgArrow2:	.asciz	" -> "
 MsgCom:		.asciz	" ^C"
 MsgSpace:	.asciz	" "
 MsgSpaces:	.asciz	"  "
-MsgWasInt4:	.asciz	"(!) INT4"
+MsgWasInt4:	.asciz	"(!) INT4 "
 MsgPressKey:	.asciz	"Press any key to exit..."
 MsgBusy:	.asciz	"(!) Can't get BSY=0, DRQ=0"<12><15>
 MsgNoRdy:	.asciz	"(!) Can't get BSY=0, RDY=1"<12><15>
 MsgNoDrq:	.asciz	"(!) Can't get DRQ=1, ERR=0"<12><15>
 MsgInfo:	.asciz	"                                    BRF Q  E"<12><15>
 MsgReadSect:	.asciz	"Reading first words of block 0"<12><15>
+MsgRead:	.asciz	" (R octal) "
 		.even
 
 Bkp004:		.word	0			; memory backup values
