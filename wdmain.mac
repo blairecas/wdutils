@@ -212,7 +212,7 @@ SaveSector0:
 	mov	R1, (R0)+
 	mov	R2, (R0)
 	; write block 0
-	call	DoReadWrite			; write it
+;	call	DoReadWrite			; write it
 	neg	ComSize				; restore read
 
 ; read block 0 of selected partition
