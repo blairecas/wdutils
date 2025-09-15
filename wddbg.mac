@@ -246,7 +246,6 @@ WriteWord:
 	mov	(SP), R0
 	com	R0
 	call	PrintOctal
-	.print	#MsgSpaces
 	mov	(SP)+, R0
 	clr	WasInt4
 	mov	R0, (R1)
@@ -479,14 +478,14 @@ MsgArrow2:	.asciz	" -> "
 MsgCom:		.asciz	" ^C"
 MsgSpace:	.asciz	" "
 MsgSpaces:	.asciz	"  "
-MsgWasInt4:	.asciz	"(!) INT4 "
+MsgWasInt4:	.asciz	" (!) INT4 "
 MsgPressKey:	.asciz	"Press any key to exit..."
 MsgBusy:	.asciz	"(!) Can't get BSY=0, DRQ=0"<12><15>
 MsgNoRdy:	.asciz	"(!) Can't get BSY=0, RDY=1"<12><15>
 MsgNoDrq:	.asciz	"(!) Can't get DRQ=1, ERR=0"<12><15>
 MsgInfo:	.asciz	"                                    BRF Q  E"<12><15>
 MsgReadSect:	.asciz	"Reading first words of block 0"<12><15>
-MsgRead:	.asciz	" (R octal) "
+MsgRead:	.asciz	" R: "
 		.even
 
 Bkp004:		.word	0			; memory backup values
