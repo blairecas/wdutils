@@ -229,6 +229,9 @@ PartBoot:
 	sob	R2, .-2
 	; let's rock
 	clr	R0				; partition #
+	; DEBUG
+	halt
+	;
 	jmp	@#0
 
 
