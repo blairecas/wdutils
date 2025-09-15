@@ -585,11 +585,12 @@ PpuRead0:
 	mov	#C_WDR_ERR, PpuError		; generic error
 	jmp	PpuExit
 60$:	; wait DRDY + DRQ (both must be set)
-	; UPD: checking only DRQ
-	clr	R3
-70$:	bit	#^B00001000, (R1)		; test DRDY + DRQ
+	mov	#8., R0
+68$:	clr	R3
+70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
 	beq	80$				; it's set (inverted)
 	sob	R3, 70$
+	sob	R0, 68$
 	mov	#C_WDR_NODRQ, PpuError
 	jmp	PpuExit
 80$:	; read one block
