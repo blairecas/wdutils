@@ -15,4 +15,6 @@ rem remove not needed files
 del _wddbg.mac
 del _wddbg.lst
 
+rem c:\Projects\uknc\ukncbtl\sav2cart release\wddbg.sav release\wddbg.bin
+
 emulator\ukncbtl

@@ -6,6 +6,7 @@
 
 C_VADDR		=: 100000
 C_SCRWID	=: 80.
+C_SCRTOP	=: 2*C_SCRWID+C_VADDR
 C_FONT_DY	=: 11.
 C_FONT_ADDR	=: 117430
 
@@ -93,7 +94,7 @@ PpuStart:
 	call	ClearScreen
 	call	SetVLines
 	mov	R0, @#272
-	mov	#C_VADDR, @#177010
+	mov	#C_SCRTOP, @#177010
 
 	; all are set
 	mtps	#0
@@ -114,23 +115,43 @@ PpuStart:
 	jmp	PpuExit
 
 10$:	; some info
+	call	WaitReady
+	.write	#^C340, #110002
+
+	; read block 0
 	mov	#7, PrintColor
 	.print	#MsgInfo
 	call	WaitReady
-	.write	#^C340, #110002
-	call	WaitReady
+	mov	#^C0, LbaLow
+	call	ReadBlock
 
-	; read block 0
+	; wait any key
+	mov	#7, PrintColor
+	.print	#MsgReadBlk1
+	clr	KeyCur
+	tst	KeyCur
+	beq	.-4
+	.print	#MsgCrLf
+
+	; read block 1
+	.print	#MsgInfo
+	call	WaitReady
+	mov	#^C1, LbaLow
+	call	ReadBlock
+
+	jmp	PpuExit
+
+
+; read block R0
+ReadBlock:
 	.write	#^C340, #110002			; 110002 0xE0 set master, LBA28
 	.write	#^C1, #110012			; 110012 sectors count
-	.write	#^C0, #110010			; 110010 LBA low
+	.write	LbaLow, #110010			; 110010 LBA low
 	.write	#^C0, #110006			; 110006 LBA med
 	.write	#^C0, #110004			; 110004 LBA high
 	.write	#^C40, #110000			; 110000 0x20 read sectors
 	call	WaitDrq
 	.print	#MsgCrLf
-	mov	#7, PrintColor
-	.print	#MsgReadSect
 	; reading first 50. words of block
 	mov	#5, PrintColor
 	mov	#5., R5
@@ -145,13 +166,13 @@ PpuStart:
 	mov	#400-50., R5
 40$:	tst	@#110016
 	sob	R5, 40$
-	
-	jmp	PpuExit
+	return	
 
+LbaLow:	.word	0
 
 ; wait for BSY=0, RDY=1
 WaitReady:
-	mov	#3, R5
+	mov	#5, R5
 40$:	.read	#110000
 	bic	#^B1111111100111111, R0	
 	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
@@ -161,23 +182,24 @@ WaitReady:
 	sob	R5, 40$
 	mov	#2, PrintColor
 	.print	#MsgNoRdy
-	tst	(SP)+
+	tst	(SP)+				; exit from one call
 	jmp	PpuExit
 50$:	return
 
 
-; wait for DRQ=1, ERR=0
+; wait for BSY=0, RDY=1, DRQ=1, ERR=0
 WaitDrq:
-	mov	#3, R5
+	mov	#5, R5
 40$:	.read	#110000
-	bic	#^B1111111111110110, R0	
-	cmp	#^B0000000000000001, R0		; need DRQ=1, ERR=0 (we are inverted)
+	bic	#^B1111111100110110, R0	
+	cmp	#^B0000000010000001, R0		; need BSY=0, RDY=1, DRQ=1, ERR=0 (we are inverted)
 	beq	50$
 	clr	R0
 	sob	R0, .
 	sob	R5, 40$
 	mov	#2, PrintColor
 	.print	#MsgNoDrq
+	tst	(SP)+				; exit from two calls
 	tst	(SP)+
 	jmp	PpuExit
 50$:	return
@@ -318,11 +340,18 @@ SetVlines:
 	mov	R0, (R0)
 	add	#2, (R0)+
 	sob	R3, 10$
-	; 288. main lines (18. * 8.)
+	; 2. empty lines	
 	mov	#C_VADDR, R1
-	mov	#288., R3
-	mov	R0, (PC)+			; save addr
-28$:	.word	000000
+	mov	#2, R3
+20$:	mov	R1, (R0)+
+	mov	R0, (R0)
+	add	#2, (R0)+
+	add	#C_SCRWID, R1
+	sob	R3, 20$
+	; save place where is current first vline
+	mov	R0, VLFirstAddr
+	; 286. main lines
+	mov	#286., R3
 30$:	mov	R1, (R0)+			; put vaddr
 	mov	R0, (R0)			; put next element addr
 	add	#2, (R0)+
@@ -330,11 +359,14 @@ SetVlines:
 	sob	R3, 30$
 	; cycle last line -> first line
 	tst	-(R0)
-	mov	28$, (R0)
-	add	#2, (R0)
+	mov	VLFirstAddr, (R0)
+	tst	(R0)+
+	mov	R0, VLLastAddr
 	mov	(SP)+, R0			; R0 <- new lines table addr
 	return
 
+VLFirstAddr:	.word	0			; first vline addr
+VLLastAddr:	.word	0			; last+1 vline addr
 
 ; clear video mem
 ClearScreen:
@@ -372,6 +404,41 @@ PopRegs:
 	return
 
 
+; clear row of current (R4) vdata and scroll screen
+; can use R3
+ScrollScreen:
+	; save used regs
+	mov	(R4), -(SP)
+	mov	R2, -(SP)
+	; adjust vaddr
+	mov	(R4), R3
+	sub	#C_VADDR, R3
+	clr	R2
+	div	#C_SCRWID, R2
+	sub	R3, (R4)
+	; clear row
+	mov	#C_FONT_DY*C_SCRWID, R3
+10$:	clr	@#177012
+	clr	@#177014
+	inc	(R4)
+	sob	R3, 10$
+	; scroll screen
+	mov	VLFirstAddr, R2
+	tst	-(R2)
+	mov	(R2), R2
+	add	#C_FONT_DY*4, R2			; R0 - addr of next
+	cmp	R2, VLLastAddr
+	blo	20$
+	mov	VLFirstAddr, R2
+20$:	mov	VLFirstAddr, R3
+	tst	-(R3)
+	mov	R2, (R3)
+	; restore used regs
+	mov	(SP)+, R2
+	mov	(SP)+, (R4)
+	return
+
+
 ; 117430 - addr of 0x00 character in ROM, font is 11. bytes per character, KOI8R
 ; R0 - string addr
 PrintStr:
@@ -388,9 +455,12 @@ PrintStr:
 	bne	20$
 	inc	PrintY
 	add	#C_FONT_DY*C_SCRWID, (R4)
-	cmp	(R4), #286.*C_SCRWID+C_VADDR
-	blo	10$
+	cmp	(R4), #288.*C_SCRWID+C_VADDR
+	blo	12$
 	sub	#286.*C_SCRWID, (R4)
+12$:	cmp	PrintY, #26.
+	blo	10$
+	call	ScrollScreen
 	br	10$
 20$:	; CR ?
 	cmp	R1, #15
@@ -476,16 +546,15 @@ MsgNoCart:	.asciz	"(!) Can't find cartridge"<12><15>
 MsgArrow1:	.asciz	" <- "
 MsgArrow2:	.asciz	" -> "
 MsgCom:		.asciz	" ^C"
+MsgSpaces:	.ascii	" "
 MsgSpace:	.asciz	" "
-MsgSpaces:	.asciz	"  "
 MsgWasInt4:	.asciz	" (!) INT4 "
-MsgPressKey:	.asciz	"Press any key to exit..."
-MsgBusy:	.asciz	"(!) Can't get BSY=0, DRQ=0"<12><15>
+MsgPressKey:	.asciz	"Press any key to exit ..."
 MsgNoRdy:	.asciz	"(!) Can't get BSY=0, RDY=1"<12><15>
-MsgNoDrq:	.asciz	"(!) Can't get DRQ=1, ERR=0"<12><15>
-MsgInfo:	.asciz	"                                    BRF Q  E"<12><15>
-MsgReadSect:	.asciz	"Reading first words of block 0"<12><15>
+MsgNoDrq:	.asciz	"(!) Can't get BSY=0, RDY=1, DRQ=1, ERR=0"<12><15>
+MsgInfo:	.asciz	<12><15>"                                    BRF Q  E"<12><15>
 MsgRead:	.asciz	" R: "
+MsgReadBlk1:	.asciz	<12><15>"Press any key to read block #1 ..."
 		.even
 
 Bkp004:		.word	0			; memory backup values
