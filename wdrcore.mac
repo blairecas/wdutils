@@ -254,4 +254,3 @@ WdrWri:	mov	#^C60, -(R1)			; 0x30 write
 	bpl	.-2
 	mov	#^C<^xE7>, (R1)			; 0xE7 - flush cache
 	return
-

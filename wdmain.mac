@@ -212,7 +212,7 @@ SaveSector0:
 	mov	R1, (R0)+
 	mov	R2, (R0)
 	; write block 0
-;	call	DoReadWrite			; write it
+	call	DoReadWrite			; write it
 	neg	ComSize				; restore read
 
 ; read block 0 of selected partition
@@ -227,11 +227,8 @@ PartBoot:
 	mov	#400, R2
 	mov	(R0)+, (R1)+
 	sob	R2, .-2
-	; let's rock
+	; let's go
 	clr	R0				; partition #
-	; DEBUG
-	halt
-	;
 	jmp	@#0
 
 
@@ -252,7 +249,7 @@ DoReadWrite:
 10$:	cmp	#342, @#C_WDR_INT+2		; wait for it to finish
 	beq	10$				; not ready yet	
 	; wait a bit more, CPU must have it's interrupt
-	mov	#200, R0
+	mov	#400, R0
 	sob	R0, .
 	; TODO: error handling
 	return
@@ -536,7 +533,6 @@ PpuCart =: .+2
 	add	#PpuIn4-., R0
 	mov	R0, @#4
 	; prep regs
-	mov	#110000, R1
 	mov	#177010, R4
 	mov	#177014, R5
 ; play note 1 on midi output (will trap 4 if absent, but its ok)
@@ -585,12 +581,12 @@ PpuRead0:
 	mov	#C_WDR_ERR, PpuError		; generic error
 	jmp	PpuExit
 60$:	; wait DRDY + DRQ (both must be set)
-	mov	#8., R0
+	mov	#8., R2
 68$:	clr	R3
 70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
 	beq	80$				; it's set (inverted)
 	sob	R3, 70$
-	sob	R0, 68$
+	sob	R2, 68$
 	mov	#C_WDR_NODRQ, PpuError
 	jmp	PpuExit
 80$:	; read one block
