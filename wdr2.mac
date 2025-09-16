@@ -66,8 +66,7 @@ MsgNoDevice:	.asciz	"(!) no WD device detected"
 
 MsgBusy:	.asciz	"(!) timeout waiting BSY off (busy)"
 MsgErr:		.asciz	"(!) bit ERR was set (error)"
-MsgNoRdy:	.asciz	"(!) timeout waiting DRDY set (not ready)"
-MsgNoDrq:	.asciz	"(!) timeout waiting DRDY, DRQ set (not ready / no data)"
+MsgNoDrq:	.asciz	"(!) timeout waiting DRQ set (not ready)"
 MsgOver:	.asciz	"(!) block # is >= partition size"
 MsgNoMem:	.asciz	"(!) can't allocate PPU memory"
 
@@ -229,10 +228,10 @@ PpuBl0:	; read absolute block 0
 	beq	60$				; no error or drive fault
 	mov	#MsgErr, R0			; generic error
 	return
-60$:	; wait DRDY and DRQ
+60$:	; wait DRQ
 	clr	R0
-70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
-	beq	80$				; both set (inverted)
+70$:	bit	#^B00001000, (R1)		; test DRQ
+	beq	80$				; set (inverted)
 	sob	R0, 70$
 	mov	#MsgNoDrq, R0
 	return
@@ -254,7 +253,7 @@ PpuCC:	mov	@#4, -(SP)
 	mov	R1, @#4
 	movb	R0, @#177054			; set testing memory mapping
 	clr	R1				; it's a flag for trap
-	mov	#^C4, @#110000			; put something to one of WD registers
+	mov	#^C340, @#110002		; put something to one of WD registers (also select master, lba)
 	mov	(SP)+, @#4
 	tst	R1
 	return

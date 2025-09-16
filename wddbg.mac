@@ -95,38 +95,30 @@ PpuStart:
 	call	SetVLines
 	mov	R0, @#272
 	mov	#C_SCRTOP, @#177010
+	mov	#7, @#177016			; default 'ink' color (white)
 
 	; all are set
 	mtps	#0
 
 	; check cartridges
-	mov	#7, PrintColor
 	.print	#MsgChkCart1
 	mov	#^B00000010, WdCart		; bank #1, cassette #1
 	call	CheckCart
 	beq	10$				; can write to IDE reg
-	mov	#7, PrintColor
 	.print	#MsgChkCart2
 	mov	#^B00001010, WdCart		; bank #1, cassette #2
 	call	CheckCart
 	beq	10$
-	mov	#2, PrintColor
 	.print	#MsgNoCart
 	jmp	PpuExit
 
-10$:	; some info
-	call	WaitReady
-	.write	#^C340, #110002
-
-	; read block 0
-	mov	#7, PrintColor
+10$:	; read block 0
 	.print	#MsgInfo
 	call	WaitReady
 	mov	#^C0, LbaLow
 	call	ReadBlock
 
 	; wait any key
-	mov	#7, PrintColor
 	.print	#MsgReadBlk1
 	clr	KeyCur
 	tst	KeyCur
@@ -153,7 +145,7 @@ ReadBlock:
 	call	WaitDrq
 	.print	#MsgCrLf
 	; reading first 50. words of block
-	mov	#5, PrintColor
+	.print	#MsgClrCyan
 	mov	#5., R5
 20$:	mov	#10., R4
 30$:	mov	@#110016, R0
@@ -180,7 +172,6 @@ WaitReady:
 	clr	R0
 	sob	R0, .
 	sob	R5, 40$
-	mov	#2, PrintColor
 	.print	#MsgNoRdy
 	tst	(SP)+				; exit from one call
 	jmp	PpuExit
@@ -197,7 +188,6 @@ WaitDrq:
 	clr	R0
 	sob	R0, .
 	sob	R5, 40$
-	mov	#2, PrintColor
 	.print	#MsgNoDrq
 	tst	(SP)+				; exit from two calls
 	tst	(SP)+
@@ -216,8 +206,6 @@ CheckCart:
 
 ; exit to .. somewhere
 PpuExit:
-	mov	#7, PrintColor
-	.print	#MsgCrLf
 	.print	#MsgPressKey
 	clr	KeyCur
 	tst	KeyCur
@@ -257,8 +245,8 @@ KeyInt:	mov	R0, -(SP)
 
 ; write R0 to (R1) with debug on screen
 WriteWord:
-	mov	#6, PrintColor
 	mov	R0, -(SP)
+	.print	#MsgClrYellow
 	mov	R1, R0
 	call	PrintOctal
 	.print	#MsgArrow1
@@ -273,10 +261,8 @@ WriteWord:
 	mov	R0, (R1)
 	tst	WasInt4
 	beq	90$
-	mov	#2, PrintColor
 	.print	#MsgWasInt4
 90$:	; read from there then
-	mov	#1, PrintColor
 	.print	#MsgRead
 	mov	(R1), R0
 	mov	R0, -(SP)
@@ -291,7 +277,7 @@ WriteWord:
 
 ; read (R1) -> R0 with debug info
 ReadWord:
-	mov	#4, PrintColor
+	.print	#MsgClrGreen
 	mov	R1, R0
 	call	PrintOctal
 	.print	#MsgArrow2
@@ -309,7 +295,6 @@ ReadWord:
 	call	PrintBinary
 	tst	WasInt4
 	beq	90$
-	mov	#2, PrintColor
 	.print	#MsgWasInt4
 90$:	.print	#MsgCrLf
 	mov	(SP)+, R0
@@ -443,7 +428,6 @@ ScrollScreen:
 ; R0 - string addr
 PrintStr:
 	call	PushRegs
-	mov	PrintColor, @#177016			; set 'ink' color
 	mov	#177010, R4
 	mov	#177024, R5
 	mov	#C_SCRWID, R2
@@ -472,7 +456,12 @@ PrintStr:
 	sub	R3, (R4)
 	mov	#C_SCRWID, R2
 	br	10$
-30$:	mul	#C_FONT_DY, R1
+30$:	; color byte
+	cmp	R1, #7
+	bhi	40$
+	mov	R1, @#177016
+	br	10$
+40$:	mul	#C_FONT_DY, R1
 	add	#C_FONT_ADDR, R1
 	.rept	C_FONT_DY
 	movb	(R1)+, (R5)
@@ -486,7 +475,6 @@ PrintStr:
 ; R0 - number
 PrintOctal:
 	call	PushRegs
-	mov	PrintColor, @#177016			; set 'ink' color
 	mov	#177010, R4
 	mov	#177024, R5
 	mov	#C_SCRWID, R2
@@ -514,7 +502,6 @@ PrintOctal:
 ; R0 - number
 PrintBinary:
 	call	PushRegs
-	mov	PrintColor, @#177016			; set 'ink' color
 	mov	#177010, R4
 	mov	#177024, R5
 	mov	#C_SCRWID, R2
@@ -536,25 +523,27 @@ PrintBinary:
 ; // Data
 ; //////////////////////////////////////////////////////////////////////////////
 
-PrintColor:	.word	7				; current color for print
 PrintY:		.word	0				; current cursor Y pos
 
+MsgClrGreen:	.asciz	<4>
+MsgClrCyan:	.asciz	<5>
+MsgClrYellow:	.asciz	<6>
 MsgCrLf:	.asciz	<12><15>
-MsgChkCart1:	.asciz	"Checking cartridge slot #1"<12><15>
-MsgChkCart2:	.asciz	"Checking cartridge slot #2"<12><15>
-MsgNoCart:	.asciz	"(!) Can't find cartridge"<12><15>
+MsgChkCart1:	.asciz	<7>"Checking cartridge slot #1"<12><15>
+MsgChkCart2:	.asciz	<7>"Checking cartridge slot #2"<12><15>
+MsgNoCart:	.asciz	<2>"(!) Can't find cartridge"<12><15>
 MsgArrow1:	.asciz	" <- "
 MsgArrow2:	.asciz	" -> "
 MsgCom:		.asciz	" ^C"
 MsgSpaces:	.ascii	" "
 MsgSpace:	.asciz	" "
-MsgWasInt4:	.asciz	" (!) INT4 "
-MsgPressKey:	.asciz	"Press any key to exit ..."
-MsgNoRdy:	.asciz	"(!) Can't get BSY=0"<12><15>
-MsgNoDrq:	.asciz	"(!) Can't get BSY=0, DRQ=1, ERR=0"<12><15>
-MsgInfo:	.asciz	<12><15>"                                    BRF Q  E"<12><15>
-MsgRead:	.asciz	" R: "
-MsgReadBlk1:	.asciz	<12><15>"Press any key to read block #1 ..."
+MsgWasInt4:	.asciz	<2>" (!) INT4 "
+MsgPressKey:	.asciz	<12><15><7>"Press any key to exit ..."
+MsgNoRdy:	.asciz	<2>"(!) Can't get BSY=0"<12><15>
+MsgNoDrq:	.asciz	<2>"(!) Can't get BSY=0, DRQ=1, ERR=0"<12><15>
+MsgInfo:	.asciz	<12><15><7>"                                    BRF Q  E"<12><15>
+MsgRead:	.asciz	<1>" R: "
+MsgReadBlk1:	.asciz	<12><15><7>"Press any key to read block #1 ..."
 		.even
 
 Bkp004:		.word	0			; memory backup values
