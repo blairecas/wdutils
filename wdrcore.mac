@@ -9,9 +9,8 @@ C_WDR_NOCART	= 2	; no cartridge (how that can be?)
 C_WDR_NOSLOT	= 3	; no slot for queue resident code
 C_WDR_BUSY	= 4	; timeout waiting BSY=0
 C_WDR_ERR	= 5	; any other IDE error
-C_WDR_NORDY	= 6	; timeout waiting drive ready
-C_WDR_NODRQ	= 7	; timeout waiting DRQ=1
-C_WDR_OVER 	= 10	; block # out of partition size
+C_WDR_NODRQ	= 6	; timeout waiting DRQ=1
+C_WDR_OVER 	= 7	; block # out of partition size
 
 WdrPartTable:	.word	0, 1			; partitions start addrs (in blocks)
 		.blkw	24.*2			; 'extra entry' for sizes calculation
@@ -124,15 +123,6 @@ WdrEx1:	; (re)queue resident
 	jmp	@#174170			; jump to process dispatcher
 
 
-; wait ready to receive command, we need to wait for BSY=0, DRQ=0
-;WdrWaitComm:
-;	mov	@#110000, R0
-;	com	R0
-;	bit	#^B10001000, R0			; test BSY and DRQ (both must be 0)
-;	bne	WdrWaitComm			; they are NOT clear
-;	return
-
-
 ; wait ready to read / write
 ; R1 must be #110000
 WdrWaitData:
@@ -145,8 +135,8 @@ WdrWaitData:
 	mov	#C_WDR_ERR, WdrError		; generic error
 	tst	(SP)+				; skip one call
 	return
-10$:	; check DRDY + DRQ (both must be 1)
-	bic	#^B1111111111011011, R0		; checking >>1 bits because of asr
+10$:	; check DRQ (must be 1)
+	bic	#^B1111111111111011, R0		; checking >>1 bits because of asr
 	bne	WdrWaitData
 	return
 
@@ -156,7 +146,6 @@ WdrWaitData:
 ; R3 - size in words
 ; WdrOperType - 0 (read), 1 (write)
 WdrOperation:
-	; call	WdrWaitComm
 	mov	R3, R0				; R3 must be size in words
 	add	#377, R0
 	clrb	R0

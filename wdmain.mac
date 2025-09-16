@@ -177,6 +177,8 @@ SelectPart:
 	inc	CurPart
 40$:	cmpb	R0, #15				; enter
 	beq	SaveSector0
+	cmpb	R0, #177			; bksp - specific boot with halt
+	beq	SaveSector0
 	; 0..7 
 	cmpb	R0, #'0
 	blo	50$
@@ -194,9 +196,18 @@ SelectPart:
 	br	10$
 
 ; save selection to sector 0
+; if R0=177 - do not save, replace jmp @#0 with halt
 SaveSector0:
+	; check if we heed halt instead of JMP @#0
+	cmp	R0, #177
+	bne	10$
+	clr	Jump0Addr			; use 'halt' instead of jmp
+	neg	ComSize				; restore read
+	br	PartBoot			; go to boot
+10$:	; print something
 	mov	#14., R0
 	call	ClearLine
+	; save partition # to block 0
 	mov	CurPart, End+120
 	add	#'0, End+120
 	; recount CRC
@@ -204,9 +215,9 @@ SaveSector0:
 	clr	R1
 	clr	R2
 	mov	#376, R3
-10$:	add	(R0)+, R1
+20$:	add	(R0)+, R1
 	adc	R2
-	sob	R3, 10$
+	sob	R3, 20$
 	neg	R1
 	com	R2
 	mov	R1, (R0)+
@@ -229,6 +240,7 @@ PartBoot:
 	sob	R2, .-2
 	; let's go
 	clr	R0				; partition #
+Jump0Addr:
 	jmp	@#0
 
 
@@ -239,6 +251,7 @@ TimerInt:
 	mov	#1000, SP
 	mtps	#200
 	clr	@#100
+	mov	#15, R0				; as 'pressed enter' by default
 	jmp	SaveSector0
 99$:	rti
 
@@ -473,11 +486,10 @@ MsgNocart:	.asciz	"(!) unable to access WD cartridge"
 MsgNoslot:	.asciz	"(!) unable to allocate PPU resident slot"
 MsgBusy:	.asciz	"(!) WD always busy (BSY=1)"
 MsgErr:		.asciz	"(!) generic WD error (ERR|DF=1)"
-MsgNordy:	.asciz	"(!) WD is not ready (BSY<>0 DRDY<>1)"
 MsgNodrq:	.asciz	"(!) DRQ not set after command"
 MsgOver:	.asciz	"(!) ... not now"
 		.even
-MsgErrTable:	MsgOk, MsgCrc, MsgNocart, MsgNoslot, MsgBusy, MsgErr, MsgNordy, MsgNodrq, MsgOver
+MsgErrTable:	MsgOk, MsgCrc, MsgNocart, MsgNoslot, MsgBusy, MsgErr, MsgNodrq, MsgOver
 
 	.even
 
@@ -580,13 +592,11 @@ PpuRead0:
 	beq	60$				; no error or drive fault
 	mov	#C_WDR_ERR, PpuError		; generic error
 	jmp	PpuExit
-60$:	; wait DRDY + DRQ (both must be set)
-	mov	#8., R2
-68$:	clr	R3
-70$:	bit	#^B01001000, (R1)		; test DRDY + DRQ
+60$:	; wait DRQ
+	clr	R3
+70$:	bit	#^B00001000, (R1)		; test DRQ
 	beq	80$				; it's set (inverted)
 	sob	R3, 70$
-	sob	R2, 68$
 	mov	#C_WDR_NODRQ, PpuError
 	jmp	PpuExit
 80$:	; read one block

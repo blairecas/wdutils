@@ -170,12 +170,12 @@ ReadBlock:
 
 LbaLow:	.word	0
 
-; wait for BSY=0, RDY=1
+; wait for BSY=0
 WaitReady:
 	mov	#5, R5
 40$:	.read	#110000
-	bic	#^B1111111100111111, R0	
-	cmp	#^B0000000010000000, R0		; need BSY=0, RDY=1 (we are inverted)
+	bic	#^B1111111101111111, R0	
+	cmp	#^B0000000010000000, R0		; need BSY=0 (we are inverted)
 	beq	50$
 	clr	R0
 	sob	R0, .
@@ -187,12 +187,12 @@ WaitReady:
 50$:	return
 
 
-; wait for BSY=0, RDY=1, DRQ=1, ERR=0
+; wait for BSY=0, DRQ=1, ERR=0
 WaitDrq:
 	mov	#5, R5
 40$:	.read	#110000
-	bic	#^B1111111100110110, R0	
-	cmp	#^B0000000010000001, R0		; need BSY=0, RDY=1, DRQ=1, ERR=0 (we are inverted)
+	bic	#^B1111111101110110, R0	
+	cmp	#^B0000000010000001, R0		; need BSY=0, DRQ=1, ERR=0 (we are inverted)
 	beq	50$
 	clr	R0
 	sob	R0, .
@@ -550,8 +550,8 @@ MsgSpaces:	.ascii	" "
 MsgSpace:	.asciz	" "
 MsgWasInt4:	.asciz	" (!) INT4 "
 MsgPressKey:	.asciz	"Press any key to exit ..."
-MsgNoRdy:	.asciz	"(!) Can't get BSY=0, RDY=1"<12><15>
-MsgNoDrq:	.asciz	"(!) Can't get BSY=0, RDY=1, DRQ=1, ERR=0"<12><15>
+MsgNoRdy:	.asciz	"(!) Can't get BSY=0"<12><15>
+MsgNoDrq:	.asciz	"(!) Can't get BSY=0, DRQ=1, ERR=0"<12><15>
 MsgInfo:	.asciz	<12><15>"                                    BRF Q  E"<12><15>
 MsgRead:	.asciz	" R: "
 MsgReadBlk1:	.asciz	<12><15>"Press any key to read block #1 ..."
