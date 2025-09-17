@@ -503,8 +503,8 @@ PpuWriteWd:
 20$:	mov	@#177014, (R5)			; put data
 	inc	@#177010
 	sob	R3, 20$
-	call	PpuWaitComm
-	mov	#^C<^xE7>, (R4)
+;	call	PpuWaitComm
+;	mov	#^C<^xE7>, (R4)
 	call	PpuWaitComm
 	jmp	PpuDone
 
@@ -550,9 +550,9 @@ PpuWaitData:
 	mov	R0, @#177014
 	tst	(SP)+				; skip one call
 	jmp	PpuDone
-10$:	; wait DRDY + DRQ
+10$:	; wait DRQ=1
 	mov	@#110000, R0
-	bic	#^B1111111110110111, R0
+	bic	#^B1111111111110111, R0
 	bne	10$
 	return
 
