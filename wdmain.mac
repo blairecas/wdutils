@@ -27,8 +27,10 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 	clr	(R0)+
 	sob	R1, .-2
 	mov	#200, @#26			; int24 will go with 200 psw
+
 	; prepare screen
 	.print	#MsgHlo
+
 	; ppu phase 2 - check HDD, read block 0, check devices
 	mov	@#157776, R0
 	mov	R0, PpuCart			; set cartridge mem map
@@ -38,13 +40,14 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 	call	PPRun
 	mov	PPCom, R0			; wait for result
 	bmi	.-4
-	movb	#2, PPCmd
+	movb	#2, PPCmd			; free mem
 	sub	#4, PPApp			; include identification (2 words)
 	call	PPSen				; release PPU mem
 	asl	R0				; get error message
 	beq	10$				; no error
 	mov	MsgErrTable(R0), R0
 	jmp	Error
+
 10$:	; we are ok for now, check atmega version
 	mov	AtmVer, R0
 	call	Chk19
@@ -54,6 +57,7 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 	call	Chk19
 	bcs	12$
 	movb	R0, MsgAtmVer
+
 12$:	; compute and set partition sizes
 	mov	#End+2, R5
 	mov	#WdrPartTable+4, R0		; partitions table addr (+1 element)
@@ -65,6 +69,7 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 	mov	R2, (R0)+			; set part table high
 	mov	R1, (R0)+			; set part table low
 	sob	R3, 20$
+
 	; compute CRC
 	mov	#MsgOk, R0
 	mov	#End, R5
@@ -79,6 +84,7 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 	beq	40$
 	mov	#MsgCrc, R0
 40$:	call	PriStr
+
 	; maximal partition # in WD (not WE WF)
 	mov	#End+2, R0
 	mov	#8., R3
@@ -239,7 +245,7 @@ PartBoot:
 	mov	(R0)+, (R1)+
 	sob	R2, .-2
 	; let's go
-	clr	R0				; partition #
+	mov	CurPart, R0			; partition #
 Jump0Addr:
 	jmp	@#0
 
@@ -479,7 +485,7 @@ MsgNoPart:	.asciz	<12><15><33><240>"2(!) first partition have size 0"<12><15>
 ;		.ascii	<270><271><272><273><274><275><276><277><12><15>
 		.byte	0
 
-MsgCrc:		.ascii	<33><240>"6(?) block 0 have wrong CRC (?)"
+MsgCrc:		.ascii	<33><240>"6(?) block 0 have wrong CRC (?) "
 MsgOk:		.ascii	<33><240>"4"<220><33><240>"7 WDBOOT"<33><240>"4 v2.0 "<33><240>"1"
 MsgAtmVer:	.asciz	"0.0"<33><240>"4"<12><15><12><15>
 MsgNocart:	.asciz	"(!) unable to access WD cartridge"
