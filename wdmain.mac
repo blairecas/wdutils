@@ -91,7 +91,8 @@ Start:	; clean up low addrs (prevent WDR from accidentally doing anything)
 50$:	tst	(R0)+
 	beq	60$
 	inc	MaxPart
-	sob	R3, 50$		
+	sob	R3, 50$
+	
 60$:	; ppu phase 3 - WD resident
 	mov	#PpuSta, R4
 	mov	#End-PpuSta/2, R5

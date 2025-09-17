@@ -115,7 +115,7 @@ WdrEx0:	; set error result
 WdrExB:	; exit if BSY=1
 	mov	(SP)+, @#177054
 
-WdrEx1:	; (re)queue resident
+WdrEx1:	; (re)queue resident (!) don't touch 3 words at that label (!) mutable in WDR2.SAV
 	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr to 'test subroutine'
 	mov	#1, @#7100			; set resident presence to 'test subroutine'
 	mov	(SP)+, R0
@@ -239,7 +239,7 @@ WdrWri:	mov	#^C60, -(R1)			; 0x30 write
 	incb	R0
 	bne	150$
 199$:	; flush cache (some drives WILL need it)
-	tstb	(R1)				; wait for BSY to clear
-	bpl	.-2
-	mov	#^C<^xE7>, (R1)			; 0xE7 - flush cache
+	; tstb	(R1)				; wait for BSY to clear
+	; bpl	.-2
+	; mov	#^C<^xE7>, (R1)			; 0xE7 - flush cache
 	return
