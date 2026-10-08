@@ -1,0 +1,114 @@
+	.title	WDBOOT
+	.enabl	LC
+
+; WD cartridge code loader part
+; main CPU code is in wdmain.mac
+
+	.asect
+	.=0
+
+Boot:	nop
+	; set cartridge mem map variables
+	ash	#3, R0
+	bis	R0, PpuCar+2
+	mov	PpuCar+2, @#157776		; store mem map
+	; start PPU boot code
+	call	PPSen
+	movb	#30, PPCmd
+	call	PPSen
+	; wait for it to finish
+	tst	PPmsg+2
+	bne	.-4
+	; unpack
+	mov	#100000+PpuBootEnd, R0
+	mov	#1000, R1
+	call	Unpack
+	jmp	@#1000
+
+Unpack:	clr	R2
+	movb	#200, R3
+	sxt	R5
+10$:	call	50$
+	movb	(R0)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcs	30$
+	call	50$
+20$:	mov	R1, R4
+	add	R5, R4
+	movb	(R4)+, (R1)+
+	sob	R2, .-2
+	aslb	R3
+	bcc	10$
+30$:	mov	#-2, R2
+	call	60$
+	incb	R2
+	bne	.+4
+40$:	return
+	swab	R2
+	mov	R2, R5
+	clrb	R5
+	bisb	(R0)+, R5
+	asr	R5
+	mov	#1, R2
+	bcs	.+6
+	call	80$
+	inc	R2
+	br	20$
+50$:	incb	R2
+60$:	aslb	R3
+	bne	70$
+	movb	(R0)+, R3
+	rolb	R3
+70$:	bcs	40$
+80$:	aslb	R3
+	rol	R2
+	br	60$
+
+PPmsg:	.word	PPArr
+        .word	177777
+PPArr:	.byte	0				; 23334 return value (0 ok)
+PPCmd:	.byte	20				; 23335 command (1 alloc, 2 free, 10 read, 20 write, 30 run)
+	.word	32				; 23336 device type (32 ppu mem)
+PPApp:	.word	23666				; 23340 argument(s) (PPU addr for mem operations)
+PPAcp:	.word	PpuBoot				; 23342 CPU addr (length in words for mem allocate)
+PPLen:	.word	PpuBootEnd-PpuBoot/2		; 23344 length in words
+
+PPSen:	mov	#PPMsg, R2
+	mov	#5, R3
+	br	20$
+10$:	movb	(R2)+, @#176676
+20$:	tstb	@#176674
+	bpl	20$
+	sob	R3, 10$
+	return
+
+; PPU boot code
+PpuBoot:
+	mtps	#200
+	mov	@#177054, -(SP)
+PpuCar:	movb	#^B00000010, @#177054
+	mov	#177010, R4
+	mov	#177014, R5
+	; copy 4kb data to CPU
+	mov	#100000/2, (R4)
+	mov	#100000, R0
+	mov	#4000, R3
+10$:	mov	(R0)+, (R5)
+	inc	(R4)
+	sob	R3, 10$
+	; tell CPU we are finished
+	mov	#PPMsg+2/2, (R4)
+	clr	(R5)
+	; return to dispatcher
+	mov	(SP)+, @#177054
+	mtps	#0
+	return
+
+PpuBootEnd:
+
+; now is packed CPU code
+@includebin _wdmain_lz.bin
+
+
+	.end	Boot

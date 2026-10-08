@@ -1,0 +1,456 @@
+	.TITLE	WDR
+
+Start:	call	Start2
+	emt	350			; .exit
+	
+Start2:	mov	#MsgHlo, R0		; print "?WDR-"
+	emt	351			; .print
+	
+	jsr	R2, M01252
+	.word	K02430
+
+	jsr	R2, M01252
+	.word	K02454
+	
+10$:	mov	#177777, R5		; R5 = result from PPU
+	bmi	10$			; result not ready yet
+	beq	M01060			; == 0 PPU code just started
+	mov	#MsgAlr, R0		; <> 0 print info
+	asr	R5			; check result
+	bcc	PriRet			; == 2 print "already loaded"
+	mov	#MsgNod, R0		; == 1 print "no device found"
+PriRet:	emt	351			; .print (common print with return, will be also used later)
+	return
+
+M01060:	mov	#K02504, @#144		; commands array addr
+	mov	#342, @#146		; magic number (exec it)
+10$:	tstb	@#146
+	bmi	10$			; wait for PPU to finish command
+	bne	M01244			; something went wrong
+	mov	#Buffer, R1		; readed block 0 addr
+
+	; test block 0 checksum
+	mov	R1, R3			; addr of block 0 in CPU
+	mov	#377, R0		; 255. words for chksum
+	clr	R4			; chksum low word
+	clr	R5			; chksum high word
+M01122:	add	(R3)+, R4
+	adc	R5
+	sob	R0, M01122
+	add	(R3), R5
+	bis	R4, R5
+	beq	M01144			; chksum is ok
+	mov	#MsgCrc, R0		; "crc invalid"
+	emt	351			; .print
+
+M01144:	; setup block addr divisors in main PPU code
+	bisb	(R1)+, R0		; sectors count
+	mov	R0, M01760		; put them to divisor #1
+	clr	R3
+	bisb	(R1)+, R3		; heads count
+	mul	R0, R3			; multiply by sectors count
+	mov	R3, M01736		; put result to divisor #2
+
+	MOV	K02446, R0		; addr in PPU
+
+	SUB	#1550, R0
+
+	ADD	R0, @K02426
+
+	; compute and fill partition addrs (in blocks)
+	; R1 is pointing to addr 000002 of block 0 data
+	mov	#K02362, R0
+	clr	R2
+	inc	R2			; low word addr (of partition 0 now)
+	clr	R3			; high word addr
+10$:	mov	R3, (R0)+		; put high word of addr
+	mov	R2, (R0)+		; put low word of addr
+	add	(R1)+, R2		; add partition size (from block 0)
+	adc	R3
+	cmp	R0, #K02426
+	bcs	10$
+	
+	jsr	R2, M01252		; copy main PPU code
+	.word	K02442
+
+	; and that's all
+	mov	#MsgOk, R0
+	br	PriRet
+
+; something went wrong
+M01244:	mov	#MsgBbd, R0		; "block 0 error"
+	br	PriRet
+	
+PpuSen:
+M01252:	call	M01310			; wait K2 ready
+	call	M01302			; send 2 bytes of CPU<->PPU array addr
+	clrb	@-(R2)
+	jsr	R2, M01276
+	.word	177777
+	tstb	@(R2)+
+M01274:	rts	R2
+M01276:	mov	#M01274, -(SP)
+M01302:	mov	PC, -(SP)		; for send byte 2 times
+	movb	(R2)+, @#176676
+M01310:	tstb	@#176674
+	bpl	M01310
+	return
+
+M01320:
+	MOV	#4, R5
+
+	JSR	R4, M01336
+
+	ADD	#2, (SP)
+
+	RTI
+M01336:
+	MOV	(R5), (SP)
+	MOV	R4, (R5)+
+M01342:
+	MOV	@#32, R2
+
+	BNE	M01410
+	MOV	#177054, R3
+
+	MOV	(R3), -(SP)
+	MOV	(PC), R1
+	MTPS	PC
+	MOV	R5, (R3)
+	TSTB	-(R1)
+	BR	M01430
+	MOV	#16, R5
+
+	MOV	R5, (R3)
+	TSTB	(R1)
+	BR	M01430
+	.WORD	105104
+M01404:
+	MOV	(SP)+, (R3)
+	MTPS	R2
+M01410:
+	MOV	(SP)+, @#4
+
+	MOV	#415, @#177010
+
+	MOV	R4, @#177014
+
+	RETURN
+M01430:
+	MOVB	R5, @#32
+
+	MOV	#177010, R4
+
+	MOV	#656, R0
+
+	CALL	@#176132
+
+	MOV	#1223, (R4)		; K02446/2
+
+	MOV	R1, @#177014
+
+	MOV	#664, (R4)
+
+	ASR	R0
+	JSR	R5, @#125602
+
+	SUB	#2426, R1
+
+	MOV	#1213, (R4)
+
+	MOV	@#177014, R0
+
+	ADD	R1, R0
+	ADD	R1, (R0)
+	MOV	@#7126, R0
+
+	BMI	M01534
+	MOV	R0, 2330(R1)
+
+	MOV	#1154, (R4)
+
+	MOV	R0, @#177014
+
+M01534:
+	ADD	#1554, R1
+
+	MOV	R1, @#7126
+
+	CLR	R4
+	BR	M01404
+
+
+; //////////////////////////////////////////////////////////////////////////////
+; // Main PPU code
+; //////////////////////////////////////////////////////////////////////////////
+
+M01550:
+PpuBeg:	.rad50	"WD "
+	.rad50	"SYS"
+PpuSta:	mtps	(PC)
+	mov	#177010, R4
+	mov	#177014, R5
+	mov	R1, -(SP)
+	mov	@#177054, -(SP)
+	
+	mov	@#32, @#177054		; mem32 in PPU? ok...
+	tstb	@#110000		; check BSY (busy) on status reg
+	bpl	M02116			; BSY=1, not ready (we are inverted here)
+	
+M01612 =: .+2
+	MOV	#0, R2
+	BGT	M02102
+	
+	mov	#146/2, (R4)		; 146 in CPU - magic number
+	cmp	#342, (R5)		; need to do anything?
+	bne	M02136			; no
+	
+	clr	M02242
+	dec	(R4)			; 144 in CPU - addr of WD.SYS interrupt
+	mov	(R5), (R4)		; set addr
+	ror	(R4)			; /2 as it in CPU RAM
+
+	sub	#5, (R4)		; 
+	mov	(R5), (R4)
+	ror	(R4)
+	
+	mov	(R5), R3		; block #
+	inc	(R4)
+	mov	(R5), R1		; x in WDx (high byte)
+	inc	(R4)			; now (R4) is buffer addr
+
+	MOV	R1, -(SP)
+	CLRB	R1
+	ASH	#177772, R1
+
+M01674 =: .+2
+	ADD	#2362, R1
+
+	MOV	(R1)+, R2
+	MOV	4(R1), R0
+
+	SUB	(R1), R0
+	CMPB	(SP)+, #373
+
+	BNE	M01724
+	MOV	(R5), (R4)
+	ROR	(R4)
+	MOV	R0, (R5)
+	BR	M02234
+M01724:
+	SUB	R3, R0
+	BCS	M02124
+	ADD	(R1), R3
+	ADC	R2
+	;
+M01736 =: .+2
+	div	#1, R2			; div by cylinder size
+	; set cylinder #
+	mov	#110006, R1		; 110006 (cylinder# low)
+	com	R2
+	mov	R2, (R1)
+	swab	R2
+	mov	R2, -(R1)		; put to 110004 (cylinder# high)
+	;
+	clr	R2
+M01760 =: .+2
+	div	#1, R2			; div by sectors in track
+	;
+	com	R2			;
+	com	R3			; 
+	sbc	R3			; +1 as we are inverted
+	mov	R2, -(R1)		; put to 110002 (head #)
+	mov	R3, @#110010		; sector #
+
+	MOV	(R5), M02104
+
+	ROR	M02104
+
+	JSR	R5, M02332
+
+	.WORD	011315
+	.WORD	005713
+	.WORD	177737
+	INC	(R4)
+	MOV	(R5), R2
+	BEQ	M02234
+	BPL	M02044
+	NEG	R2
+	JSR	R5, M02332
+
+	.WORD	011513
+	.WORD	005013
+	.WORD	177717
+M02044:
+	MOV	R2, R3
+	ADD	#377, R3
+
+	CLRB	R3
+	SWAB	R3
+	CMP	R3, R0
+	BLOS	M02064
+	MOV	R0, R3
+M02064:
+	COM	R3
+	MOV	R3, @#110012
+
+	MOV	R1, @#110000
+
+	MOV	R2, M01612
+
+M02102:
+M02104 =: .+2
+	MOV	#0, (R4)
+
+	MOV	#110016, R3
+
+	MOVB	@#110000, R1
+
+M02116:	BPL	M02312
+	ASR	R1
+	BCS	M02132
+M02124:
+	INC	M02242
+
+	BR	M02234
+M02132:
+	BIC	#177727, R1
+
+M02136:
+	BNE	M02312
+	MOV	#400, R0
+
+	SUB	R0, R2
+	BGE	M02152
+	ADD	R2, R0
+M02152:
+	ADD	#3, R0
+
+	ASHC	#177776, R0
+
+	ASHC	#177764, R1
+
+	SUB	#14, R1
+
+	SUB	R1, PC
+M02174:
+	HALT
+	INC	(R4)
+K02200:
+	.WORD	000000
+	INC	(R4)
+K02204:
+	.WORD	000000
+	INC	(R4)
+K02210:
+	.WORD	000000
+	INC	(R4)
+	SOB	R0, M02174
+	MOV	(R4), M02104
+
+	MOV	R2, M01612
+
+	BGT	M02102
+	BEQ	M02234
+	INC	PC
+M02234:
+	MOV	#63, (R4)
+
+M02242 =: .+2
+	MOV	#0, (R5)
+
+	DEC	(R4)
+	MOV	(R5), R0
+	MOV	#12, (R4)
+
+	MOV	(R5), R1
+	MOV	R0, (R5)
+	BIC	#100000, @#177716
+
+	BIS	#100000, @#177716
+
+	MOV	R1, (R5)
+	INC	PC
+	BR	M02312
+K02302:
+	.WORD	000000
+	.WORD	5267
+	.WORD	177302
+	.WORD	100774
+	
+M02312:	MOV	(SP)+, @#177054
+	MOV	(SP)+, R1
+	MOV	R1, @#7126
+
+	MTPS	(PC)
+	JMP	@#174164
+
+M02332:	MOV	(R5), M02174
+	MOV	(R5), K02200
+	MOV	(R5), K02204
+	MOV	(R5)+, K02210
+	MOV	(R5)+, K02302
+	MOV	(R5)+, R1
+	RTS	R5
+
+; RT11 partition addresses [high word] [low word]
+K02362:	.word	0, 0
+	.word	0, 1
+	.word	0, 0
+	.word	0, 0
+	.word	0, 0
+	.word	0, 0
+	.word	0, 0
+	.word	0, 0
+	.word	0, 0			; + extra one partition
+
+PpuEnd:	
+K02426:
+	.WORD	M01674
+
+; pre ppu code write
+K02430:	.BYTE	0			; result
+	.BYTE	20			; write to
+	.WORD	32			; PPU memory
+	.WORD	1136			; PPU addr
+	.WORD	M01320			; CPU addr
+	.WORD	114			; length
+
+; main ppu code 
+K02442:	.byte	0, 20			; write to
+	.word	32			; PPU memory
+K02446:	.word	000000			; PPU addr (of main code)
+	.word	PpuBeg			; CPU addr (of main code)
+	.word	PpuEnd-PpuBeg/2		; length
+
+; pre ppu code run
+K02454:	.byte	0, 30			; run
+	.word	32			; 
+	.word	1136			; PPU addr
+	; 2 words not needed for run
+
+; one operation
+K02462:	.WORD	0			; block # 
+	.WORD	0			; function # | x in WDx
+	.WORD	Buffer			; where to/from
+	.WORD	400			; size (words)
+
+; array of addrs of operations (queue)
+	.WORD	K02462
+	.WORD	0
+	.WORD	0
+	.WORD	0
+	.WORD	0	
+K02504:	.WORD	2			; RTI command
+
+MsgHlo:	.ascii	<15>"?WDR-"<200>
+MsgAlr:	.asciz	"I-Resident already load"
+MsgOk:	.asciz	"I-Resident installed successfully"
+MsgNod:	.asciz	"F-No device on bus PP"
+MsgBbd:	.asciz	"F-SuperBlock - input error"
+MsgCrc:	.asciz	"W-SuperBlock - CRC error"
+	.even
+
+; 002722
+Buffer:
+	.end	Start

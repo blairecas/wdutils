@@ -1,0 +1,869 @@
+;	       Резидентная часть драйвера винчестера
+;                       с загрузчиком
+;                =================================
+; 	        *** Written by Oleg H. oct 1997 ***
+;			   version 01.10
+
+	.TITLE	HDD-disk resident
+	.LIST	TTM
+	.DSABL	GBL
+	.ENABL	LC
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	Code		; Код программы
+	.Psect	Proc		; Подпрограммы
+	.Psect	PPtst		; Тест КЖД/ЖД
+	.Psect	PPsbio		; Ввод/Вывод суперблока
+	.Psect	PP.Ins		; Инсталлятор резидента
+	.psect	trproc		; TRAP-процедуры
+	.psect	$trpt1		; TRAP-таблица
+	.psect	$trpt2
+	.Psect	Data		; Данные
+	.Psect	Text,d		; Текстовые строки
+	.Psect	PP.Res		; Резидент ПП
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+
+.macro	trproc	pname
+	.save
+	.psect	$trpt2
+$'pname::
+	.word	pname
+	.restore
+pname::
+.endm
+
+.macro	trcall	pname
+	trap	<$'pname-trptab>
+.endm
+
+.macro	trproc	pname
+	.save
+	.psect	$trpt2
+$'pname::
+	.word	pname
+	.restore
+pname::
+.endm
+
+.macro	trcall	pname
+	trap	<$'pname-trptab>
+.endm
+
+.macro	mput	adrmp
+	trcall	mput$
+	.word   adrmp
+.endm
+
+.macro	.Exit
+	clr	pc
+.endm
+
+.macro	.Print	msg
+ .if nb,<msg>
+	trcall	Pr$1
+	.word	msg
+ .iff
+	trcall	Pr$2
+ .endc
+.endm
+
+.macro	.Eprint	msg
+	trcall	E$print
+	.word	msg
+.endm
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	WD$csr = 176670
+	WD$vec = 144
+	pw$vec = 24
+	rsk2   = 176674
+	rdk2   = 176676
+	keyprc = 111144
+	dprc0  = 174152
+	disp   = 174164
+	rap    = 177010
+	rdp    = 177014
+	WD$reg = 177054
+	sysreg = 177716
+	casadr = 32		; 26		; with 600 !
+	PASWRD = 342
+	ADRPRC = 7126		; Процесс рестарта
+	PPBase = 1100
+	WD$cqe = <1022-1010>/2
+	DefBot = 120
+	DefTim = 122
+	Hide   = 124
+	EmpSiz = 126
+	EmPtr  = 40
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.psect	$trpt1
+trptab:
+	.psect	$trpt2
+
+	.psect	trproc
+trdisp:	mov	r5,2(sp)
+	mov	(sp),r5	
+	mov	-(r5),r5		; Код команды TRAP
+	mov	trptab-104400(r5),r5	; Адрес перехода на процесс
+	rts	r5			; Пуск процесса
+
+	.rem %
+	При выходе в стеке находится старое значение R5, 
+	а в R5-адрес возврата в основную программу,
+	т.е. вызов эквивалентен jsr r5,...
+%
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	code
+
+Start:
+.iif	df,casset	mov	#Casset,R0	; Кассета 0 для отладки
+
+	mtps	(pc)
+	Reset
+	ash	#3,r0			; Бит выбора кассеты
+	bis	r0,N.Cas		; Nо кассеты для инсталлятора
+	bis	r0,NN.Cas		; Nо кассеты для RW-процедуры
+	bis	r0,NNN.Cas		; Nо кассеты для TESTa
+	mov	#TRdisp,@#34
+	clr	@#36
+	mput	Lo$Tst
+	mput	Ex$Tst
+
+	.Print	Ver
+	
+TstHDD	= :.+2
+11$:	mov	#-1,r0
+	bmi	11$
+	
+	tstb	r0
+	beq	14$
+	cmpb	r0,#377
+	bne	17$
+	.Eprint	NoPwr
+14$:	.Eprint	NoCab
+
+17$:	Call	sb$r			; Читаем мастер-блок
+3$:	Call	sb.tst			; mov sbbuf,r1
+	beq	5$
+	.Print	SbCRC
+5$:					; Настройка резидента
+	movb	(r1)+,Spt		; Секторов на дорожку
+	movb	(r1)+,r3		; Головок в цилиндре
+	mul	Spt,r3
+	mov	r3,SptHed		; Секторов в цилиндре
+	
+	mov	Hide+SbBuf,r5		; Скрытая партиция
+	inc	r5
+	ash	#2,r5
+	add	r5,Hidden		; к -4 компенсация inc r5
+	
+	mov	#DevTab,r0		; Заполняем таблицу партиций
+	add	r0,r5			; Указатель на скр. парт (в DevTab)
+	mov	#1,r2
+	clr	r3
+10$:
+	mov	r3,(r0)+
+	mov	r2,(r0)+
+	tst	(r1)
+	beq	30$
+
+	cmp	r0,r5
+	beq	20$			; Скрытая партиция
+
+	Cmpb	Max.PN,#'7		; Не более 8
+	Bhis	20$			; Boot-разделов
+	incb	Max.PN
+20$:	add	(r1)+,r2
+	adc	r3
+	cmp	r0,#E$Dtab
+	blo	10$
+30$:
+	add	r0,Parts
+	add	r0,rend1
+	sub	r0,rend2
+
+40$:	Mput	Lo$Ins			; Забросим инсталлятор
+	Mput	Ex$Ins			; И выполним его
+
+50$:	mov	#alread,r0
+
+WaiTes = :.+2
+1$:	mov	#-1,r5			; Ждем кода возврата инсталлятора
+	bmi	1$
+; *** RETCOD: 0 - already load; 1 - No memory; 2 - Load OK ****
+	beq	loadOK
+
+	mov	#Succes,r0
+	dec	r5
+	bne	LoadOK
+	.EPrint	NoMem
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+
+LoadOK:	.print
+
+	mov	#100,r2
+	mov	(r2),-(sp)
+	mov	#Tim$lc,(r2)
+	bic	#^c7,SbBuf+DefBot
+	bisb	SbBuf+DefBot,Cur.PN
+	clr	r0			; Загружаться с 0 раздела
+	cmpb	Max.PN,#'1
+	blt	Single			; Единственная парт. - не спрашивать
+Qpart:	.print	Q.Part
+15$:	mov	SbBuf+DefTim,Tim$w
+16$:	tst	Tim$w
+	bmi	Sb.Exi
+17$:	tstb	@#177560
+	bpl	16$
+	movb	@#177562,r0
+	cmpb	r0,#177			; переписать суперблок безусловно
+	beq	Sb.Wr
+	cmpb	r0,#15			; Не дожидаясь тайм-аута - default
+	beq	Sb.Exi
+
+	cmpb	r0,#40
+	bne	300$
+	clr	r4
+	mov	SbBuf+DefTim,r5
+	add	#25.,r5
+	div	#50.,r4
+	cmp	r4,#9.
+	ble	170$
+	mov	#9.,r4
+170$:	add	#'0,r4
+	movb	r4,Cur.T
+	.Print	Q.Wait
+171$:	tstb	@#177560
+	bpl	171$
+	movb	@#177562,r3
+	cmpb	r3,#15
+	beq	173$
+	cmpb	r3,#'0
+	blt	171$
+	cmpb	r3,#'9
+	bgt	171$
+	movb	r3,Cur.T
+	sub	#'0,r3
+	mul	#50.,r3
+	cmp	r3,SbBuf+DefTim
+	beq	173$
+	mov	r3,SbBuf+DefTim
+	clr	r1
+173$:	.Print	Cur.T
+	br	Qpart
+
+300$:	cmpb	r0,#'0
+	blo	15$
+	cmpb	r0,Max.PN
+	bhi	15$
+
+	cmpb	r0,Cur.PN		; Если тот же раздел - не писать
+	beq	400$
+ 	movb	r0,Cur.PN
+	movb	r0,SbBuf+DefBot
+	clr	r1
+400$:
+Sb.Exi:	tst	r1			; 
+	bne	Sb.NWr			; 
+Sb.Wr:	call	Sb.clc			; mov sbbuf,r1
+	Call	sb$w			; write superblock
+Sb.NWr:
+	.Print	Cur.PN
+	.Print	ResCur
+	.print	CrLfLf
+
+	movb	Cur.PN,r0
+	bicb	#^c7,r0			; Номер привода
+	movb	r0,SbRead+3
+
+Single:
+	mov	(sp)+,(r2)		; @#100
+
+	mov	#WD$vec,r3		
+	mov	#Sb$Lc,(r3)+		; Читаем 0-блок
+	mov	#paswrd,(r3)
+
+31$:	tstb	(r3)
+	bmi	31$
+
+	bne	B0$Err
+
+	asl	r2			; 100 -> 200
+	clr	r3
+	mov	#SbBuf,r1		; Копируем начальный загрузчик в 0
+	cmp	(r1),(pc)+
+	nop
+	bne	B0$inv
+ 	mtps	r2			; #200
+40$:
+	mov	(r1)+,(r3)+
+	mov	(r1)+,(r3)+
+	sob	r2,40$
+
+ 	mtps	r2
+	clr	pc			; Пуск начального загрузчика
+B0$Err:
+	.EPrint	B0.Err
+B0$Inv:	
+	.Eprint	B0.Inv
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	data
+
+Lo$tst:	.byte	0,20,32,0		; Запись инсталлятора
+	.word	PPBase
+	.Word	TstBeg,<TstEnd-TstBeg>/2
+
+Lo$Ins:	.byte	0,20,32,0		; Запись инсталлятора
+	.word	PPBase
+	.Word	InsBeg,<InsEnd-InsBeg>/2
+
+Lo$SB:	.byte	0,20,32,0		; Запись RW0-процедур
+	.word	PPBase
+	.Word	Sb.RW,<Sb.RW.e-Sb.RW>/2
+
+Ex$Tst:
+Ex$Ins:	.byte	0,30,32,0		; Запуск инсталлятора
+	.word	PPBase
+
+Ex$SbR:	.byte	0,30,32,0		; Чтение суперблока
+	.word	PPBase+Sb.R-Sb.RW
+Ex$SbW:	.byte	0,30,32,0		; Запись суперблока
+	.word	PPBase+Sb.W-Sb.RW
+
+SbRead:	.word	0			; Q$blkn
+	.word	0			; Q$func ! Q$unit
+	.word	SbBuf			; Q$buff
+	.word	400			; Q$wcnt
+	.Word	SbRead			; ...CQE
+	.blkw	WD$Cqe-3
+Tim$lc:	dec	(pc)+
+Tim$w:	.word	10.
+Sb$Lc:	Rti
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	Text
+
+Alread:	.asciz	<204>/уже был /<211><216>		; OK
+Succes:	.asciz	<204><211>/ успешно/<216>		; OK
+SbCRC:	.asciz	<202>/W-/<205>/контрольной суммы/<216>
+B0.Inv:	.asciz	<203>/Некорректный/<215><210><216>	; OK
+B0.Err:	.asciz	<207><210>/a 0/<216>			; OK
+Sbioer:	.asciz	<207>/мастер-/<210>/a/<216>		; OK
+NoMEM:	.asciz	<214>/памяти в ОЗУ ПП/<216>
+NoPwr:	.asciz	<214>/электропитания/<216>		; OK	
+NoCab:	.asciz	<203>/Обрыв шлейфа/<216>		; OK
+
+
+Ver:
+	.Ascii	<201>/ V01.10 by Oleg H./<33><247><65>	; OK
+CrLfLf:	.byte	12,216,0				; +OK
+
+Q.Wait:	.ascii	<15>/Время ожидания, с /<217>/9/<213>	; OK
+Cur.T:	.asciz	/0/<212>				; +OK
+Q.part:	.ascii	<216>/Номер/<215>/раздела/<217>		; OK
+Max.PN:	.byte	'0-1, 213				; +OK
+Cur.PN:	.asciz	/0/<212>				; +OK
+ResCur:	.byte	33,247,66,216,0				; OK
+
+W$tab:
+	.byte	201			; С которого начнем счет
+	.asciz	/WDROM/			; 201	; WDROM
+	.asciz	/?/<201>/-/		; 202	; ?WDROM-
+	.asciz	<202>/F-/		; 203	; ?WDROM-F-
+	.asciz	<202>/I-Резидент /	; 204	; ?WDROM-I-Резидент
+	.asciz	/Ошибка /		; 205	; 
+	.asciz	<203><205>		; 206	; ?WDROM-F-Ошибка
+	.asciz	<206>/чтения /		; 207	; ?WDROM-F-Ошибка чтения
+	.asciz	/блок/			; 210	;
+	.asciz	/загружен/		; 211	;
+	.byte	10,33,277,244,0		; 212	; *** back ***
+	.asciz	/): /<33><244>		; 213	;
+	.asciz	<203>/Нет /		; 214	; ?WDROM-F-Нет
+	.asciz	/ boot-/		; 215	;
+	.byte	15,12,0			; 216	;
+	.asciz	/ (0/<221>		; 217
+	.byte	0			; Конец словаря
+	.even
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	proc
+trproc	MPut$
+	call	5$		;  Подождем готовности К2
+1$:	call	4$		;  Вытолкнем в К2 первые 2 байта адрес
+	clrb	@-(r5)		;  Очистим байт ответа
+	jsr	r5,3$		;  Передадим 2 байта завершения 377
+	.word	-1		;
+	tstb	@(r5)+		;  Проверим ответ
+2$:	rts	r5		;  Выйдем в основную программу
+3$:	push	#2$		; 
+4$:	push	pc		;  Обеспечим повторный вход
+	movb	(r5)+,@#rdk2	;  Передача байта в К2
+5$:	tstb	@#rsk2		;  Ожидание готовности К2
+	bpl	5$		;
+	return			;  выход
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+trproc	E$print
+	mov	#5747,2(r5)	; tst -(pc)
+
+trproc	Pr$1	
+	mov	(r5)+,r0
+trproc	Pr$2
+	br	7$
+5$:
+	push	r0
+	mov	r4,r0
+	jsr	r5,7$
+	pop	r0
+	inc	r0
+7$:
+	mov	#W$tab,r4
+	movb	(r4)+,r3	; 201
+	
+8$:	cmpb	(r0),r3
+	beq	5$
+10$:	tstb	(r4)+
+	bne	10$
+	inc	r3
+	tstb	(r4)		; Конец массива слов ?
+	bne	8$		; Нет
+
+20$:	tstb	@#177564
+	bpl	20$
+
+	movb	(r0)+,@#177566
+	bne	7$
+
+	rts	r5
+
+;55555555555555555555555555555555555555555555555555555555555555555555555
+Sb.Tst:
+	jsr	r2,crcclc
+	.word	377
+	add	(r3),r5
+	bis	r4,r5
+	Return
+Sb.clc:
+	jsr	r2,crcclc
+	.word	376
+	com	r5
+	neg	r4
+	mov	r4,(r3)+
+	mov	r5,(r3)
+	Return
+crcclc:
+	mov	(r2)+,r0
+	mov	#SbBuf,r1
+	mov	r1,r3
+	clr	r4
+	clr	r5
+2$:	add	(r3)+,r4
+	adc	r5
+	sob	r0,2$
+	Rts	r2
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+SB$R:
+	call	$comon
+	Mput	Ex$SBR
+	return
+SB$W:
+	call	$comon
+	Mput	Ex$SBW
+$ret..:	return
+$comon:
+	mput	lo$sb
+	mov	#-1,sb$WF
+
+	call	@(sp)+	
+
+$$$com:	tst	(pc)+
+sb$WF:	.blkw	1
+	bmi	$$$com
+	beq	$ret..
+	.EPrint	SbIOer
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	pp.ins
+
+; RETCOD: 0 - already load; 1 - No memory; 2 - Load OK
+InsBeg:
+	mov	#Rap,r4
+	mov	#Rdp,r5
+	clr	r3
+	tst	@#casadr
+	bne	100$
+	inc	r3
+N.Cas	= .+2
+	mov	#6,@#CasAdr	; Установим No кассеты для резидента
+
+	mov	#<SbBuf+EmpSiz>/2,(r4)	; Пустой блок в ОЗУ ПП
+	mov	(r5),r0
+	ble	5$		; Не требуется
+	
+	Call	@#176132	; Getmem(); r0 - size, r1 - pointer
+	cmp	r0,(r5)		; А дали достаточно памяти ?
+	blo	100$
+	mov	r1,@#Emptr	; Указатель на пустой блок
+5$:
+rend1	= .+2
+	mov	#-R$beg,r0
+	mov	r0,r2
+
+	Call	@#176132	; Getmem(); r0 - size, r1 - pointer
+
+	cmp	r0,r2		; А дали достаточно памяти ?
+	blo	100$
+	inc	r3
+
+	mov	#R$beg/2,(r4)	; 
+	Asr	r0
+	jsr	r5,@#125602	; Copy resident...
+	; r1 указывает на буфер за конец резидента
+rend2	= .+2
+	add	#S$beg,r1		; Адрес входа в резидент	
+
+	add	r1,reldot-S$beg(r1)	; Релокация
+
+	mov	@#adrprc,r0		; Адрес 
+	bmi	10$
+	mov	r0,jmpadr-S$beg(r1)
+10$:
+	mov	r1,@#adrprc
+100$:
+	mov	#WaiTes/2,(r4)
+	mov	r3,(r5)
+	Return
+InsEnd:
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	PPtst
+; Тестируем наличие винчестера на шине ПП
+TstBeg:
+	mov	@#100,JTimA
+	mov	#JTLc-TstBeg+PPBase,@#100
+	Return
+JTLc:
+	mov	@#WD$reg,-(sp)		; Сохраним старое состояние
+NNN.Cas	= .+2
+	mov	#6,@#WD$reg		; Подключим СПЗУ
+
+	dec	#10.*50.
+	beq	10$
+	tstb	@#110000
+	beq	100$
+	cmpb	@#110000,#377
+	beq	100$
+
+10$:	mov	JTimA,@#100		; Винчестер ожил (или нет?)
+	push	@#Rap
+	mov	#TstHDD/2,@#Rap
+	mov	@#110000,@#Rdp
+	pop	@#Rap
+
+100$:	mov	(sp)+,@#WD$reg
+	jmp	@(pc)+
+JTimA:
+TstEnd:
+
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	PPsbio
+;/////////////	SctCnt	Sct	TrkLo	TrkHi	S:D:H	OpCode
+sb.rw:
+Sb.W:
+	jsr	r2,sbcmd	; Пишем мастер-блок
+	.Byte	^c1,	^c1,	^c0,	^c0,	^c240,	317
+	mov	(r1),(r3)
+Sb.ret:	mov	#sb$WF/2,@#rap
+	mov	r0,(r1)		; 0 - if OK; 400 - if error
+	return
+
+Sb.R:
+	jsr	r2,sbcmd	; Читаем мастер-блок
+	.Byte	^c1,	^c1,	^c0,	^c0,	^c240,	337
+	mov	(r3),(r1)
+
+	tst	r0		; Как прочитался?
+	beq	Sb.ret		; Нормально - выйдем
+	
+	jsr	r2,sbcmd	; Автодетект
+	.Byte	^c1,	^c1,	^c0,	^c0,	^c240,	^c354
+	mov	(r3),(r1)
+
+	tst	r0		; Как прошел автодетект
+	bne	Sb.ret		; Ошибка - все, дальше ловить нечего
+
+	mov	#<SbBuf/2+3>,@#Rap	; head
+	incb	(r1)
+	comb	(r1)
+	bicb	(r1),.head
+	mov	#<SbBuf/2>+6,@#Rap	; sct
+	movb	(r1),.spt
+
+	jsr	r2,sbcmd	; Установка геометрии
+.spt:	.Byte	^c1,	^c1,	^c0,	^c0
+.head:	.Byte	^c240, ^c^b10010001
+	Halt
+	
+	jsr	r2,sbcmd	; Читаем мастер-блок
+	.Byte	^c1,	^c1,	^c0,	^c0,	^c240,	337
+	mov	(r3),(r1)
+
+	br	Sb.ret
+
+Sbcmd:
+	mov	#6,r0
+	mov	#Rdp,r1
+	call	int.d
+2$:
+	call	int...
+	movb	@#110000,r4
+	bpl	2$			; Device BUSY
+	aslb	r4
+	bvc	2$
+
+	mov	#110014,r4
+10$:
+	dec	r4
+	movb	(r2)+,-(r4)
+	sob	r0,10$
+
+	mov	(r2)+,Sb.Cmd		; Команда пиши/читай
+	beq	int.e			; Выход без передачи данных
+
+	Mov	#400,R0			; 400 - размер блока
+20$:
+	call	int...
+	movb	(r4),r3
+	bpl	20$			; BSY
+	asr	r3
+	bcc	sbIerr
+	bic	#^c44,r3
+	bne	20$
+
+	mov	#110016,r3
+	mov	#SbBuf/2,@#Rap
+
+sb.cmd:	.blkw	1
+	inc	@#Rap
+	sob	r0,sb.cmd
+sbIerr:				; 0 - if OK; 400 - if error	
+int.e:
+	mov	R5,@#WD$reg
+	mtps	r0		; 6 или 400 или 0, но не 200!!!
+	rts	r2
+
+Int...:	jsr	r2,int.e
+int.d:
+	mov	@#WD$reg,R5		; Сохраним старое состояние
+	mtps	(pc)
+NN.Cas	= .+2
+	mov	#6,@#WD$reg		; И подключим СПЗУ
+	return
+sb.rw.e:
+;5555555555555555555555555555555555555555555555555555555555555555555555555
+	.Psect	pp.res
+
+R$beg:	.rad50	/WD SYS/
+S$beg:
+	mtps	(pc)			; Загрузим PSW == 304
+	mov	@#WD$reg,-(sp)		; Сохраним старое состояние
+	mov	@#CASADR,@#WD$reg	; И подключим СПЗУ
+	mov	r1,@#adrprc		; Занесем адрес первого процесса
+	movb	@#110000,r0
+	bpl	PL.nop			; BSY  = 0 - Device BUSY
+	aslb	r0
+	bmi	NE$nop			; DRDY = 1 - Не готов DRDY
+	mov	#rap,r4
+	mov	#rdp,r5
+	mov	(pc)+,r2
+wcnt:	.word	0
+	bgt	common			; Еще чего-то надо доделать
+
+	mov	#<WD$vec/2>+1,(r4)	; Указывает на PSW в векторе ЦМ
+	cmp	#paswrd,(r5)
+NE$nop:	bne	NE.nop			; Пустой вызов - выйти
+
+	clr	RetCod			; Код возврата установим в 0
+
+				; ** Извлечение из ЦП параметров
+	dec	(r4)			; Указатель на WDint
+	mov	(r5),(r4)
+	ror	(r4)
+	sub	#WD$cqe,(r4)		; Указатель на WDcqe
+	mov	(r5),(r4)
+	ror	(r4)			; Указатель на элемент очереди
+
+	mov	(r5),r3			; Номер блока
+	inc	(r4)
+	mov	(r5),r1			; Номер устройства в ст. байте
+	bmi	E.bad			
+10$:
+	clrb	r1
+	ash	#-6,r1			; -8 + 2 - смещ. в таблице
+	cmp	r1,(pc)+		; Скрытая партиции
+Hidden:	.word	-4			; -1 << 2
+	blo	20$			; Меньше скрытой партиции
+	cmp	(r1)+,(r1)+
+20$:
+Parts	= .+2
+	cmp	r1,#-DevTab-4		; N партиции больше существующего?
+	bhis	E.bad			; ********************************
+	
+	add	(pc)+,r1		; Указ. на DevTab (ст. слово)
+reldot:	.word	DevTab-S$Beg
+
+	mov	(r1)+,r2
+
+	mov	4(r1),r0
+	sub	(r1),r0			; Размер раздела (партиции)
+	cmpb	(r5),#373		; Spfun "SIZE" ?
+	bne	20$
+					; Обработка SpFun_373
+	inc	(r4)			; Теперь указывает на @буфер
+	mov	(r5),(r4)
+	ror	(r4)			; Теперь указывает на буфер
+	mov	r0,(r5)
+	br	exit00
+20$:
+	tstb	(r5)
+	bne	E.bad
+	inc	(r4)			; Теперь указывает на @буфер
+	sub	r3,r0			; Сколько блоков еще можно читать 
+					; из этого раздела
+	blo	E.bad			; Нельзя за границу раздела !!!
+
+	add	(r1),r3			; R2,R3 - 32-х разрядный абсолютный
+	adc	r2			; номер блока на винчестере
+
+SPTHED = :.+2
+	div	#1,r2
+	mov	#110006,r1
+	com	r2
+	mov	r2,(r1)			; Дорожка мл
+	swab	r2
+	mov	r2,-(r1)		; Дорожка ст
+	clr	r2
+SPT    = :.+2
+	div	#1,r2
+	bis	#240,r2			; Размер сектора-512
+	com	r2
+	com	r3
+	sbc	r3
+
+	mov	r2,-(r1)		; Поверхность
+	mov	r3,@#110010		; Сектор
+	mov	(r5),buff		; Buffer
+	ror	buff
+
+	jsr	r5,Set$RW		; #Установим режим чтения
+	mov	(r3),(r5)		; 7
+	tst	(r3)			; 7
+	.word	177737			; 9
+
+	inc	(r4)
+	mov	(r5),r2			; Количество слов
+	beq	exit0
+	bpl	1$
+	neg	r2
+	jsr	r5,Set$RW		; #Установим режим записи
+	mov	(r5),(r3)		; 7
+	clr	(r3)			; 7
+	.word	177717			; 9
+1$:
+	mov	r2,r3
+	add	#377,r3
+	clrb	r3
+	swab	r3			; Сколько блоков читать (мл. байт)
+
+	cmp	r3,r0
+	blos	10$
+	mov	r0,r3
+	mov	r0,r2
+	swab	r2
+
+10$:	com	r3
+	mov	r3,@#110012		; Кол-во секторов
+	mov	r1,@#110000		; Старт операции
+	br	S.wcnt
+Common:
+	mov	(pc)+,(r4)
+buff:	.blkw	1
+	mov	#110016,r3
+next$b:
+	movb	@#110000,r1
+PL.nop:	bpl	ex.nop			; BSY
+	asr	r1
+	bcs	10$
+	movb	@#110014,RetCod+1
+E.bad	= .				; I/O ERROR
+	inc	RetCod
+Exit00	= .
+	clr	r2
+	br	exit0
+10$:	bic	#^c44,r1
+NE.nop:	bne	ex.nop
+
+	Mov	#400,R0		; 400 - размер блока 
+	sub	r0,r2
+	bge	copy
+	add	r2,r0
+copy:
+	Add	#3,r0
+	ashc	#-2,r0
+	ashc	#-14,r1
+	sub	#14,r1
+	sub	r1,pc
+cmd1:	.blkw	1
+	inc	(r4)
+cmd2:	.blkw	1
+	inc	(r4)
+cmd3:	.blkw	1
+	inc	(r4)
+cmd4:	.blkw	1
+	inc	(r4)
+	sob	r0,cmd1
+
+	mov	(r4),buff
+S.wcnt:	mov	r2,wcnt
+	bgt	common		; R2 < 0 -Флаг - надо доделать операцию
+exit0:
+	mov	#<WD$vec/2>+1,(r4)
+RetCod = :.+2
+	mov	#0,(r5)			; Код ошибки
+	dec	(r4)
+	mov	(r5),r0			; Вектор прерывания
+	mov	#pw$vec/2,(r4)
+	mov	(r5),r1
+	mov	r0,(r5)			; Указатель на WD$int
+	bic	#100000,@#sysreg	; Прерывание в ЦМ
+	bis	#100000,@#sysreg	; Прерывание в ЦМ
+	clr	wcnt			; Оп. завершена
+	mov	r1,(r5)			; Восстановим 24 вектор
+
+	neg	r2
+	ble	rest24
+cmd5:	.blkw	1
+	sob	r2,cmd5
+rest24:
+
+ex.nop:	
+	mov	(sp)+,@#WD$reg
+	mov	@#adrprc,r1		; Занесем адрес первого процесса
+	mtps	(pc)			; Загрузим PSW == 117
+	jmp	@(pc)+
+jmpadr:	.word	disp			; Вернемся в диспетчер
+
+Set$RW:
+	mov	(r5),Cmd1
+	mov	(r5),Cmd2
+	mov	(r5),Cmd3
+	mov	(r5)+,Cmd4
+	mov	(r5)+,Cmd5
+	mov	(r5)+,r1
+	Rts	r5
+DevTab:
+E$Dtab	= DevTab + <2*2*<1+8.+8.+8.+8.+6.>>
+SbBuf	= E$Dtab
+
+	.END	start
+

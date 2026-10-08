@@ -1,0 +1,245 @@
+; //////////////////////////////////////////////////////////////////////////////
+; // PPU resident code
+; //////////////////////////////////////////////////////////////////////////////
+
+C_WDR_INT	= 144	; WD.SYS int vec in CPU RAM
+
+C_WDR_CRC	= 1	; block 0 CRC is bad (it's just a warning)
+C_WDR_NOCART	= 2	; no cartridge (how that can be?)
+C_WDR_NOSLOT	= 3	; no slot for queue resident code
+C_WDR_BUSY	= 4	; timeout waiting BSY=0
+C_WDR_ERR	= 5	; any other IDE error
+C_WDR_NODRQ	= 6	; timeout waiting DRQ=1
+C_WDR_OVER 	= 7	; block # out of partition size
+
+WdrPartTable:	.word	0, 1			; partitions start addrs (in blocks)
+		.blkw	24.*2			; 'extra entry' for sizes calculation
+
+; resident entry
+WdrMain:
+	mtps	#200				; no way you, interrupts...
+	mov	R0, -(SP)			; needed for requeue resident
+	mov	#177010, R4
+	mov	#177014, R5
+	; check command
+	mov	#C_WDR_INT+2/2, (R4)		; PSW addr of WD.SYS interrupt vector
+	cmp	#342, (R5)			; used as 'command read/write' to resident
+	bne	WdrEx1				; no command issued
+	; have something
+	mov	@#177054, -(SP)			; save mappings
+WdrCart	=: .+2
+	movb	#^B00000010, @#177054		; default is cassette #1, bank #1
+	; before anything check for BSY=0
+	tstb	@#110000
+	bpl	WdrExB				; BSY=1 - we are busy, do nothing (wait)
+	; ok - now we need to do something
+WdrError =: .+2
+	clr	#000000				; WDR error word
+WdrLbaHigh =: .+2
+	clr	#000000				; WDR LBA high 8 bits (not used highest 4 bits)
+WdrLbaLow =: .+2
+	clr	#000000				; WDR LBA low 16 bits
+WdrOperType =: .+2
+	clr	#000000				; operation type (0 - read, <>0 - write)
+	mov	#1, R0				; max size for special operation with block 0
+	; get params, Oleg H. code
+	dec	(R4)
+	mov	(R5), (R4)			; addr of WS.SYS int addr
+	ror	(R4)				; /2 as we are using CPU RAM, C cleared by CLR
+	sub	#5, (R4)			; skip something (queue)
+	mov	(R5), (R4)			; get addr of queue element
+	ror	(R4)				; /2, C cleared by SUB (must be..)
+	mov	(R5), R3			; [BLKN] block #
+	inc	(R4)
+	mov	(R5), R1			; [UNIT|FUNC] high byte is x in WDx, low byte can be 373
+	bmi	24$				; special operations - with absolute block 0
+	; get partition size -> R0
+	clrb	R1				; need to get addr in PartTable
+	ash	#-6, R1				; (>> 8) << 2 (PartTable is 4-bytes entry)
+	add	PC, R1
+	add	#WdrPartTable-., R1
+	mov	(R1)+, R2			; high word of part LBA
+	mov	4(R1), R0			; low word of next part LBA
+	sub	(R1), R0			; subtract low word of this part LBA (get size in blocks)
+	; special function 373 (get device size)
+	cmpb	(R5), #373
+	bne	10$
+	inc	(R4)
+	mov	(R5), (R4)			; [BUFF] addr of buf in CPU
+	ror	(R4)				; C is cleared by cmpb
+	mov	R0, (R5)			; put partition size
+	br	WdrEx0
+10$:	; get LBA and operation size
+	sub	R3, R0				; subtract block # from size (max size in blocks to read/write)
+	bhi	20$				; not exceeding partition boundary
+	mov	#C_WDR_OVER, WdrError
+	br	WdrEx0
+20$:	add	(R1), R3			; add partition addr to block #
+	adc	R2				; high word of addr, C is cleared after
+	mov	R2, WdrLbaHigh
+	mov	R3, WdrLbaLow
+24$:	inc	(R4)
+	mov	(R5), R2			; [BUFF] R2
+	clc					; just in case
+	ror	R2				; /2
+	inc	(R4)
+	mov	(R5), R3			; [WCNT] R3 data size in words
+	beq	WdrEx0				; do nothing if zero
+	bpl	30$				; positive - it's read
+	neg	R3				; negative - it's write
+	inc	WdrOperType			; set operation to write
+30$:	; corect read/write size (now R0 - max size in blocks)
+	cmp	R0, #200			; 200(8) sectors is all 64k memory
+	bhis	40$				; have a lot of space
+	swab	R0				; R0 - max size in words
+	cmp	R3, R0
+	blos	40$
+	mov	R0, R3
+40$:	; do read / write
+	call	WdrOperation
+
+WdrEx0:	; set error result
+	mov	#C_WDR_INT+2/2, (R4)
+	mov	WdrError, (R5)
+	; execute int 24 in CPU with addr of WD.SYS int
+	dec	(R4)
+	mov	(R5), R0			; get WD.SYS int vector
+	beq	WdrExB				; none of it - then nothing to do
+	mov	#24/2, (R4)			; addr 24 in CPU (vector of power int)
+	mov	(R5), R1			; save original val
+	mov	R0, (R5)			; set new addr
+	bic	#100000, @#177716		; execute interrupt on 24 in CPU
+	bis	#100000, @#177716
+	mov	R1, (R5)			; restore CPU int 24
+
+WdrExB:	; exit if BSY=1
+	mov	(SP)+, @#177054
+
+WdrEx1:	; (re)queue resident (!) don't touch 3 words at that label (!) mutable in WDR2.SAV
+	mov	#23666+WdrMain-PpuSta, @#7124	; set resident addr to 'test subroutine'
+	mov	#1, @#7100			; set resident presence to 'test subroutine'
+	mov	(SP)+, R0
+	mtps	#0
+	jmp	@#174170			; jump to process dispatcher
+
+
+; wait ready to read / write
+; R1 must be #110000
+WdrWaitData:
+	; check BSY
+	movb	(R1), R0
+	bpl	WdrWaitData			; wait for BSY=0
+	; check ERR
+	asr	R0
+	bcs	10$
+	mov	#C_WDR_ERR, WdrError		; generic error
+	tst	(SP)+				; skip one call
+	return
+10$:	; check DRQ (must be 1)
+	bic	#^B1111111111111011, R0		; checking >>1 bits because of asr
+	bne	WdrWaitData
+	return
+
+
+; read/write operation
+; R2 - addr/2 in CPU
+; R3 - size in words
+; WdrOperType - 0 (read), 1 (write)
+WdrOperation:
+	mov	R3, R0				; R3 must be size in words
+	add	#377, R0
+	clrb	R0
+	swab	R0
+	com	R0				; sectors count inverted
+	; ide regs
+	mov	#110014, R1			; 110014 error code
+	mov	R0, -(R1)			; 110012 sectors count
+	mov	WdrLbaLow, R0
+	com	R0
+	mov	R0, -(R1)			; 110010 low 8 bits of LBA
+	swab	R0
+	mov	R0, -(R1)			; 110006 med 8 bits of LBA
+	mov	WdrLbaHigh, R0
+	com	R0
+	mov	R0, -(R1)			; 110004 high 8 bits of LBA
+	mov	#^C340, -(R1)			; 110002 0xE0 set master, LBA
+	; other regs
+	mov	R2, (R4)			; addr/2 in CPU
+	mov	#110016, R2			; IDE data register addr
+	; R1 110000
+	; R2 110016
+	; R3 size in words
+	tst	WdrOperType
+	bne	WdrWri
+
+; read operation
+WdrRea:	mov	#^C40, -(R1)			; 0x20 read
+	; read full sectors	
+	swab	R3
+	tstb	R3
+	beq	30$
+10$:	call	WdrWaitData
+	mov	#100, R0
+20$:	mov	(R2), (R5)
+	inc	(R4)
+	mov	(R2), (R5)
+	inc	(R4)
+	mov	(R2), (R5)
+	inc	(R4)
+	mov	(R2), (R5)
+	inc	(R4)
+	sob	R0, 20$
+	decb	R3
+	bne	10$
+30$:	; read last sector		
+	swab	R3
+	tstb	R3
+	beq	99$
+	call	WdrWaitData
+	mov	R3, R0
+40$:	mov	(R2), (R5)
+	inc	(R4)
+	sob	R3, 40$
+	; skip to the end of sector
+50$:	tst	(R2)
+	incb	R0
+	bne	50$
+99$:	return
+
+; write operation
+WdrWri:	mov	#^C60, -(R1)			; 0x30 write
+	; write full sectors	
+	swab	R3
+	tstb	R3
+	beq	130$
+110$:	call	WdrWaitData
+	mov	#100, R0
+120$:	mov	(R5), (R2)
+	inc	(R4)
+	mov	(R5), (R2)
+	inc	(R4)
+	mov	(R5), (R2)
+	inc	(R4)
+	mov	(R5), (R2)
+	inc	(R4)
+	sob	R0, 120$
+	decb	R3
+	bne	110$
+130$:	; write rest		
+	swab	R3
+	tstb	R3
+	beq	199$
+	call	WdrWaitData
+	mov	R3, R0
+140$:	mov	(R5), (R2)
+	inc	(R4)
+	sob	R3, 140$
+	; write zeroes until end of sector
+150$:	clr	(R2)
+	incb	R0
+	bne	150$
+199$:	; flush cache (some drives WILL need it)
+	; tstb	(R1)				; wait for BSY to clear
+	; bpl	.-2
+	; mov	#^C<^xE7>, (R1)			; 0xE7 - flush cache
+	return
